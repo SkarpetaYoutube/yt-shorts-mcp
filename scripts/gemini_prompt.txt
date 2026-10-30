@@ -1,0 +1,36 @@
+You are a careful annotator producing SOURCE MATERIAL for another model. Do NOT evaluate, rate or comment on the quality of the script, story, humor or editing. Only report what is visible/audible, and clearly mark anything that is an inference.
+
+The video is a YouTube Short in "fake text message" style: a chat conversation is shown on screen, often read aloud by voices.
+
+TASK
+1. Transcribe every chat message that appears on screen, in order of appearance, verbatim in its original language (do not translate, do not fix spelling). For each message give: first time it becomes visible (M:SS.s, best estimate to 0.1 s), sender as shown (name shown on screen, or "left bubble"/"right bubble" if no name), and the exact text.
+2. Find EVERY photo/image that is part of the conversation (images sent as messages, images in bubbles, attachments, screenshots, memes, stickers that are pictures). Do NOT count: profile avatars in the header, emoji inside text, the app UI, the background gameplay/video behind the chat. If unsure whether something is a conversation image, include it and mark it uncertain.
+   For each image give:
+   - first_visible (M:SS.s) and last_visible (M:SS.s), best estimate to 0.1 s;
+   - sent_by (as in point 1);
+   - description_pl: a concrete, literal description IN POLISH of what is visible in the image (people, objects, text inside the image, setting, colors). No judgments;
+   - text_in_image: any readable text inside the image, verbatim, or null;
+   - messages_before: up to 3 messages immediately before the image (time, sender, text);
+   - messages_after: up to 3 messages immediately after the image (time, sender, text);
+   - related_messages: messages that refer to the image. For each: the message (time, sender, text), and "basis": either "explicit" (the message itself clearly names or points to the image, e.g. "look at this", a caption attached to the image) or "assumption" (your inference). Write the reason in Polish in "reason_pl";
+   - uncertainty_pl: in Polish, anything uncertain or missing (blurry, partly covered, visible too briefly, cropped, cannot read text, possibly missed duplicates).
+3. If the same image appears several times, list it once with all appearance intervals in "appearances".
+4. Report frames/time ranges where you could not see the chat clearly ("unclear_ranges").
+
+OUTPUT: valid JSON only, no markdown fences, with this shape:
+{
+ "video_duration_s": number|null,
+ "messages": [{"t": "M:SS.s", "sender": string, "text": string}],
+ "images": [{
+   "id": 1, "first_visible": "M:SS.s", "last_visible": "M:SS.s",
+   "appearances": [{"from": "M:SS.s", "to": "M:SS.s"}],
+   "sent_by": string, "description_pl": string, "text_in_image": string|null,
+   "messages_before": [{"t": "M:SS.s", "sender": string, "text": string}],
+   "messages_after": [{"t": "M:SS.s", "sender": string, "text": string}],
+   "related_messages": [{"t": "M:SS.s", "sender": string, "text": string, "basis": "explicit"|"assumption", "reason_pl": string}],
+   "uncertainty_pl": string|null
+ }],
+ "no_images_found": boolean,
+ "unclear_ranges": [{"from": "M:SS.s", "to": "M:SS.s", "reason_pl": string}],
+ "notes_pl": string|null
+}
