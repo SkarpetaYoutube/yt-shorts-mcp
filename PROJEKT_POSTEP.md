@@ -42,8 +42,20 @@ Ograniczenia: Gemini tylko darmowy (250 wywołań/dzień wewn.), Supadata 300, b
 - Poprawki: zabezpieczenie ID filmu (URL, player.getVideoData, długość ±3 s) przed każdym przewinięciem/zapisem; wyłączenie autoodtwarzania; blokada nawigacji do innego /watch?v= (page.route + pushState); capture() = jedno przewinięcie, ekran i wycinek z TEGO SAMEGO momentu, walidacja (wycinek ≤60% karty, ≤60% czerni); stare pliki nie są nadpisywane (.stary-<czas>.png); sukces wymaga verified.
 - Manifest: 1–3 verified (kontrola wzrokowa), 4 cofnięte do niepotwierdzonego, zły wycinek przeniesiony (nie skasowany).
 
-## 2026-10-27 — test 3 rolek (bieg 6): 341 s, 10/12 par poprawnych wzrokowo (9) + 1 z dymkiem
-- Rolki: 3vCANkZ_hAU 4/4, E2BybkIVj6E 3/4 (brak zdj. 1: okno 0–8 s, 0 klatek próbkowania), EeZ2GB7WqSk 3/4 (brak zdj. 2: tylko 2 klatki próbkowania w oknie 13,1–18,7 s). Zabezpieczenie ID zadziałało (WRONG_VIDEO: RE3_PGwDwhw → ponowienie).
-- Kontrola wzrokowa: 9 par poprawnych; EeZ #4: wycinek zawiera dymek „She's busy, lil bro!!!" nad zdjęciem → cofnięte.
-- Przyczyny: (1) próbkowanie przez odtwarzanie w sterowanym Edge daje za mało klatek (0–2) → dodano uzupełnienie przewijaniem przez odtwarzacz co 0,5 s; (2) szary dymek tuż nad zdjęciem zlewał się z maską zdjęcia → obcinanie wierszy dymku (neutralny szary 28–80 + biały tekst) od góry/dołu.
-- Zmierzone przedziały czasu dla większości zdjęć = 1 klatka (słabe próbkowanie), więc czasy „zmierzone" są orientacyjne.
+## Zamknięcie etapu (kontrola paczki 3 rolek)
+- Paczka: wyniki\paczka_3vCANkZ_hAU\paczka\ — 24 obrazy PNG (12 par rozmowa+wycinek), wszystkie obejrzane i przypisane poprawnie; 24/24 odnośników w paczka.md działa; transkrypty z czasami: 60/57/61 segmentów.
+- Dla modelu: paczka.md + cały folder frames\ (PNG) [+ dane.json]. Sam paczka.md ma tylko ścieżki względne.
+- Poprawka: zloz_paczke.mjs przenosi stare pliki statusu do _stare_statusy\ (nic nie kasuje).
+- Nie uruchomiono: testu 10 rolek, nowych wywołań Gemini/Supadata.
+- Pomiar 5 rolek @KiroText: skrypt zrzuty\pomiar_5rolek.ps1 (osobne czasy faz); dane: job c-6d00d65f63a849a09f8bee0b, eksport s-2909e0c8fc9a4d27ac6a5687
+
+## Zmiany 27.10 (przed testem wydajnosci)
+- Przegladarka: JEDEN trwaly profil programu (profil_przegladarki_programu\<kanal>), jedna karta na cala partie, odtworzenie z tego samego profilu po awarii. NIE uzywa profilu osobistego. Bramka zgody (bramka.mjs): auto "Reject all"/"Odrzuc wszystko" (PL/EN, ramki, przekierowanie consent.*), CAPTCHA/logowanie/nietypowy ruch -> status WYMAGA_CZLOWIEKA, rolka pominieta, po 2 kolejnych blokadach reszta pominieta. Licznik interwencji w przebieg.json (cel: 0).
+- Klatki kontekstowe (kontekst.mjs + inpage.contextScan/shotAt): wiadomosci potrzebne = messages_after (do last_visible+1,5 s) + related_messages, czas korygowany transkryptem (ogon wiadomosci); screen = najpozniejsza PELNA klatka ze zdjeciem (nieuciete) nie dalej niz t_ready+2,5 s; gdy zdjecie znika przed reakcja: screen zdjecia + (srodek) + osobny screen reakcji; kadr = karta rozmowy (bez tla gry); ciasny wycinek zdjecia zachowany. Bez nowych wywolan Gemini. Manifest: context_shots[], messages_needed, t_ready_s, context_complete.
+- Testy lokalne: test_kontekst.mjs (dane 3vCANkZ_hAU zdj.1 i 4 + syntetyczne), test_bramka.mjs (EN/PL, cookies po restarcie, CAPTCHA), syntetyczny film end-to-end (KOMPLET). NIE sprawdzone na zywym YouTube/Edge.
+
+## ZNANY BŁĄD (2026-10-27) — dobór kontekstu pomijał przedział między zdjęciem a reakcją
+Rolka cN_DmOQ6PT4, zdjęcie 1: plan wybierał klatkę ze zdjęciem (0,3 s) i reakcję od 4,1 s, ale wiadomość „you wish” (ok. 3,0 s) jest widoczna razem z laptopem w przedziale 3,0–3,8 s, którego nie sprawdzano (po 3,85 s karty już nie ma).
+Wzorzec oczekiwanego kadru (od użytkownika, tylko do porównania): cały panel rozmowy — laptop, nadawca „Dad ❤️” i trzy wiadomości łącznie z „you wish”, bez gameplayu.
+Poprawka w programie: krok 1 sondowanie od chwili po ostatniej potrzebnej wiadomości (tReady, potem wcześniej co 0,3 s) — jeśli zdjęcie nadal widoczne w tym samym rozmiarze, jedna klatka zdjęcie+wiadomości; krok 2 dotychczasowa logika (klatka ze zdjęciem + osobna reakcja). Ręczne `--probe` zostaje tylko jako awaryjne, oznaczone `selection: RECZNY_AWARYJNY`.
+Status: poprawka przetestowana lokalnie; weryfikacja na cN_DmOQ6PT4#1 w toku.
