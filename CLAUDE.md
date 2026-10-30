@@ -31,3 +31,9 @@ Maksymalny czas próby ok. 27,5 min (pobranie ≤2 min, zrzuty ≤25 min, ≤5 m
 - Serwer: `npm install`, `npm test` (vitest), `npm run typecheck`, `npm run dev`, `npm run deploy`. Sekrety: `wrangler secret put <NAZWA>` (lista w `.dev.vars.example`). Nigdy nie commitować `.dev.vars`.
 - Potok zrzutów: `cd zrzuty && npm install && npx playwright install chromium`; testy: `node test_kontekst.mjs`, `node test_bramka.mjs`, `node test_naprawy.mjs`.
 - Skrypty `.ps1` są pod Windows PowerShell (PC użytkownika: folder `C:\Users\coman\Desktop\yt-mcp\zrzuty`).
+
+## Struktura repo
+- `src/`, `test/`, `wrangler.jsonc` — serwer MCP (Cloudflare Workers).
+- `scripts/` — PowerShell (Windows): `deploy.ps1`, `redeploy.ps1`, `secrets.ps1` (sekrety wpisujesz ukrytym promptem), `podlacz_gemini.ps1`, `pobierz*.ps1`, `gemini_prompt.txt`. Skrypty były pisane do uruchamiania z głównego folderu projektu (`$PSScriptRoot`) — po przeniesieniu do `scripts/` trzeba je uruchamiać z poprawioną ścieżką albo skopiować do korzenia.
+- `zrzuty/` — potok zrzutów (Node + Playwright). `zrzuty/README.md` jest częściowo historyczny; aktualne zasady są w tym pliku.
+- Nie ma w repo: `wyniki/` (dane i paczki), `profil_przegladarki_programu/` (ciasteczka), podpisane linki eksportów (`pobierz_wszystko.ps1`), `deploy_log.txt`.
