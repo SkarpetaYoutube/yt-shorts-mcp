@@ -1,0 +1,7 @@
+# Lokalne uruchomienie (wrangler dev). NIE commituj prawdziwych wartości. Na produkcji: wrangler secret put <NAZWA>.
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+SIGNING_KEY=
+YOUTUBE_API_KEY=
+SUPADATA_API_KEY=
+ALLOWED_GITHUB_USERS=twoj-login-github
