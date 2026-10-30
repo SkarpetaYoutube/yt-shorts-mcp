@@ -1,0 +1,11 @@
+node_modules/
+.wrangler/
+.dev.vars
+.env
+dist/
+*.zip
+# dane robocze i profil przeglądarki programu (zawiera ciasteczka!) - nigdy do repo
+profil_przegladarki_programu/
+wyniki/
+zrzuty/zrzuty/
+zrzuty/diagnostyka.log
