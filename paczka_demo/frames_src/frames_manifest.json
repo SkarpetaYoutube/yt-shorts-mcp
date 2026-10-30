@@ -1,0 +1,82 @@
+[
+ {
+  "video_id": "3vCANkZ_hAU",
+  "image_id": 1,
+  "model_first": "0:00.0",
+  "model_last": "0:04.0",
+  "source": "YouTube, odtwarzacz w panelu przeglądarki (klatka z canvas, pokazana na ekranie i zrzucona)",
+  "confirmed": true,
+  "measured_first_s": null,
+  "measured_last_s": null,
+  "capture_t_s": 2.5,
+  "conversation_file": "frames/3vCANkZ_hAU/zdjecie1_rozmowa.jpg",
+  "photo_file": "frames/3vCANkZ_hAU/zdjecie1_wycinek.jpg",
+  "photo_box_px": {
+   "x": 48,
+   "y": 138,
+   "w": 102,
+   "h": 150
+  },
+  "note": "zdjęcie wykryte i obramowane automatycznie na klatce t=2.5 s, sprawdzone wzrokiem; zrzut z ekranu panelu (rozdzielczość ograniczona do ok. 333x592), nie wygenerowany jeszcze skryptem zrzuty.mjs"
+ },
+ {
+  "video_id": "3vCANkZ_hAU",
+  "image_id": 2,
+  "model_first": "0:05.1",
+  "model_last": "0:08.5",
+  "source": "YouTube, odtwarzacz w panelu przeglądarki (klatka z canvas, pokazana na ekranie i zrzucona)",
+  "confirmed": true,
+  "measured_first_s": null,
+  "measured_last_s": null,
+  "capture_t_s": 6.6,
+  "conversation_file": "frames/3vCANkZ_hAU/zdjecie2_rozmowa.jpg",
+  "photo_file": "frames/3vCANkZ_hAU/zdjecie2_wycinek.jpg",
+  "photo_box_px": {
+   "x": 48,
+   "y": 138,
+   "w": 138,
+   "h": 150
+  },
+  "note": "zdjęcie wykryte i obramowane automatycznie na klatce t=6.6 s, sprawdzone wzrokiem; zrzut z ekranu panelu (rozdzielczość ograniczona do ok. 333x592), nie wygenerowany jeszcze skryptem zrzuty.mjs"
+ },
+ {
+  "video_id": "3vCANkZ_hAU",
+  "image_id": 3,
+  "model_first": "1:02.0",
+  "model_last": "1:05.0",
+  "source": "YouTube, odtwarzacz w panelu przeglądarki (klatka z canvas, pokazana na ekranie i zrzucona)",
+  "confirmed": true,
+  "measured_first_s": null,
+  "measured_last_s": null,
+  "capture_t_s": 64.25,
+  "conversation_file": "frames/3vCANkZ_hAU/zdjecie3_rozmowa.jpg",
+  "photo_file": "frames/3vCANkZ_hAU/zdjecie3_wycinek.jpg",
+  "photo_box_px": {
+   "x": 48,
+   "y": 138,
+   "w": 102,
+   "h": 150
+  },
+  "note": "zdjęcie wykryte i obramowane automatycznie na klatce t=64.25 s, sprawdzone wzrokiem; zrzut z ekranu panelu (rozdzielczość ograniczona do ok. 333x592), nie wygenerowany jeszcze skryptem zrzuty.mjs"
+ },
+ {
+  "video_id": "3vCANkZ_hAU",
+  "image_id": 4,
+  "model_first": "1:34.0",
+  "model_last": "1:38.0",
+  "source": "YouTube, odtwarzacz w panelu przeglądarki (klatka z canvas, pokazana na ekranie i zrzucona)",
+  "confirmed": true,
+  "measured_first_s": null,
+  "measured_last_s": null,
+  "capture_t_s": 96.0,
+  "conversation_file": "frames/3vCANkZ_hAU/zdjecie4_rozmowa.jpg",
+  "photo_file": "frames/3vCANkZ_hAU/zdjecie4_wycinek.jpg",
+  "photo_box_px": {
+   "x": 48,
+   "y": 138,
+   "w": 148,
+   "h": 150
+  },
+  "note": "zdjęcie wykryte i obramowane automatycznie na klatce t=96.0 s, sprawdzone wzrokiem; zrzut z ekranu panelu (rozdzielczość ograniczona do ok. 333x592), nie wygenerowany jeszcze skryptem zrzuty.mjs"
+ }
+]
