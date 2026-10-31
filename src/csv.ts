@@ -34,12 +34,33 @@ export interface VisionImage {
   uncertainty_pl: string | null;
   verification_pl: string;
 }
+/** Dane techniczne przebiegu Gemini (to, co nie jest treścią odczytu): oryginalna odpowiedź API i parametry wywołania. */
+export interface VisionRun {
+  run_id: string;
+  model_requested: string | null;
+  model_version: string | null;
+  attempt: number | null;
+  http_status: number | null;
+  finish_reason: string | null;
+  usage: unknown;
+  params: unknown;
+  video_duration_s: number | null;
+  no_images_found: boolean | null;
+  /** included = pełny tekst odpowiedzi API w raw_response; not_stored = brak w bazie; omitted_too_large = zbyt duża na eksport (jest w bazie, patrz get_image_analysis) */
+  raw_response_status: "included" | "not_stored" | "omitted_too_large";
+  raw_response_chars: number | null;
+  /** SHA-256 (hex) tekstu raw_response; null, gdy tekstu nie ma w eksporcie */
+  raw_response_sha256: string | null;
+  /** oryginalna odpowiedź Gemini API bez zmian (klucz API jest w niej zamaskowany); w CSV pomijana (tylko JSON) */
+  raw_response: string | null;
+}
 export interface VisionExport {
   run_id: string;
   model: string | null;
   fps: number;
   api_seconds: number | null;
   analyzed_at: string | null;
+  run: VisionRun;
   images: VisionImage[];
   messages: { t: string | null; sender: string | null; text: string }[];
   unclear_ranges: { from: string | null; to: string | null; reason_pl: string | null }[];
@@ -104,6 +125,12 @@ export const COLUMNS = [
   "transcript_timed_status", "vision_status", "vision",
 ] as const;
 
+/**
+ * Kolumny CSV = kolumny JSON + dodatkowe tylko dla CSV, na końcu (pozycje dotychczasowych kolumn się nie zmieniają):
+ * vision_json to pełna znormalizowana wizja rolki jako JSON (bez surowej odpowiedzi API, która jest tylko w JSON), vision_json_chars to jej długość.
+ */
+export const CSV_COLUMNS = [...COLUMNS, "vision_json", "vision_json_chars"] as const;
+
 const q = (v: string) => (/[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
 const n = (v: number | null) => (v == null ? "" : String(v));
 const b = (v: boolean | null) => (v == null ? "" : v ? "TAK" : "NIE");
@@ -142,14 +169,28 @@ export function timedStatus(hasText: boolean, nsegs: number, sgst: string | null
   return "unknown_not_recorded";
 }
 
+const vmsgs = (a: { t: string | null; sender: string | null; text: string }[]) => (a.length ? a.map((m) => `${m.t ?? "?"} ${m.sender ?? "?"}: ${m.text}`).join(" | ") : "brak");
+
+/** Czytelny zapis wizji w jednej komórce CSV. Pełny, lossless zapis jest w kolumnie vision_json. */
 export function visionToText(v: VisionExport | null): string {
   if (!v) return "";
   const L: string[] = [];
   for (const im of v.images) {
     L.push(`Zdjęcie ${im.id ?? "?"} [${im.first_visible ?? "?"}–${im.last_visible ?? "?"}] nadawca: ${im.sent_by ?? "?"}: ${im.description_pl ?? ""}`);
+    if (im.text_in_image) L.push(`  tekst na zdjęciu: ${im.text_in_image}`);
+    L.push(`  wiadomości przed: ${vmsgs(im.messages_before)}`);
+    L.push(`  wiadomości po: ${vmsgs(im.messages_after)}`);
     for (const m of im.related_messages) L.push(`  powiązanie (${m.link_status_pl}): ${m.t ?? "?"} ${m.sender ?? "?"}: ${m.text}`);
+    if (im.uncertainty_pl) L.push(`  niepewność wg modelu: ${im.uncertainty_pl}`);
   }
   return L.join("\n");
+}
+
+/** Cała znormalizowana wizja jako JSON do CSV. Surowa odpowiedź API jest pomijana (jest w JSON), zostaje jej długość i SHA-256. */
+export function visionJson(v: VisionExport | null): string {
+  if (!v) return "";
+  const { raw_response: _omit, ...run } = v.run;
+  return JSON.stringify({ ...v, run: { ...run, raw_response_note: "pełny tekst odpowiedzi API tylko w pliku JSON (vision.run.raw_response); tu jego długość i SHA-256" } });
 }
 
 /**
@@ -160,6 +201,7 @@ export const csvSafe = (s: string): string => (/^[=+\-@\t\r]/.test(s) ? "'" + s 
 
 /** Komórki CSV jednego rekordu (bez cytowania) – wspólne dla budowy i weryfikacji. */
 export function csvCells(r: ExportRecord): string[] {
+  const vj = visionJson(r.vision);
   return [
     csvSafe(r.title), String(r.duration_seconds), csvSafe(r.transcript ?? ""), r.published_at, r.url, n(r.views),
     r.video_id, r.channel_id, csvSafe(r.channel_title), r.channel_handle ?? "", r.measured_at ?? "",
@@ -170,6 +212,7 @@ export function csvCells(r: ExportRecord): string[] {
     r.transcript_status, r.comments_status, r.comments_fetched_at ?? "", r.stats_status,
     csvSafe(commentsToText(r.top_comments_relevance)), timedToText(r.transcript_timed),
     r.transcript_timed_status, r.vision_status, csvSafe(visionToText(r.vision)),
+    vj, vj ? String(vj.length) : "",
   ];
 }
 
@@ -182,7 +225,7 @@ export function jsonObject(r: ExportRecord): Record<string, unknown> {
 
 /** Pierwsza partia dostaje BOM UTF-8 i nagłówek. Końce wierszy: CRLF (RFC 4180). */
 export function buildCsvBatch(records: ExportRecord[], first: boolean): string {
-  let out = first ? "﻿" + COLUMNS.join(",") + "\r\n" : "";
+  let out = first ? "﻿" + CSV_COLUMNS.join(",") + "\r\n" : "";
   for (const r of records) out += csvCells(r).map(q).join(",") + "\r\n";
   return out;
 }
@@ -232,6 +275,11 @@ function mdVision(r: ExportRecord): string[] {
     return L;
   }
   L.push(`Model: ${v.model ?? "?"}, fps ${v.fps}, przebieg \`${v.run_id}\`, czas wywołania ${v.api_seconds ?? "?"} s. Zdjęć wykrytych przez model: ${v.images.length}.`);
+  const run = v.run;
+  const raw = run.raw_response_status === "included" ? `oryginalna odpowiedź API: ${run.raw_response_chars} znaków, SHA-256 ${run.raw_response_sha256 ?? "?"}, pełny tekst w pliku JSON (vision.run.raw_response)`
+    : run.raw_response_status === "omitted_too_large" ? `oryginalna odpowiedź API: ${run.raw_response_chars} znaków, zbyt duża na eksport (jest w bazie serwera, patrz get_image_analysis)`
+    : "oryginalnej odpowiedzi API nie zapisano";
+  L.push(`Przebieg: model zażądany ${run.model_requested ?? "?"}, wersja modelu ${run.model_version ?? "?"}, próba ${run.attempt ?? "?"}, HTTP ${run.http_status ?? "?"}, finish_reason ${run.finish_reason ?? "?"}, tokeny ${(run.usage as any)?.totalTokenCount ?? "?"}; ${raw}.`);
   L.push(`Uwaga: ${v.limits_pl}`);
   L.push(`Obrazy: ${v.frames.reason_pl}`, "");
   for (const im of v.images) {

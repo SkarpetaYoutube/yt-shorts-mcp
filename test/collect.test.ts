@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { runDurableObjectAlarm, runInDurableObject, evictDurableObject } from "cloudflare:test";
 import { buildWorld, installFetch, stub, drive, runExport, setEnv, expectedText, resetStore, rej, type World, makeText, CHANNEL_ID } from "./helpers";
-import { COLUMNS, parseCsv } from "../src/csv";
+import { COLUMNS, CSV_COLUMNS, parseCsv } from "../src/csv";
 
-const FIELDS = [...COLUMNS];
+const FIELDS = [...COLUMNS]; // pola JSON
+const CSV_FIELDS = [...CSV_COLUMNS]; // kolumny CSV: pola JSON + vision_json, vision_json_chars
 let w: World;
 const start = (count: number, mode: any = "newest", tm: any = "native") => stub().startJob({ channel: "@przyklad", mode, count, transcriptMode: tm, lang: null });
 const files = async (job: string) => ({
@@ -81,7 +82,7 @@ describe("100 Shortsów, długie transkrypcje, integralność", () => {
     expect(rows).toHaveLength(100);
     // CSV (niezależny parser)
     const grid = parseCsv(f.csv.replace(/^﻿/, ""));
-    expect(grid[0]).toEqual(FIELDS);
+    expect(grid[0]).toEqual(CSV_FIELDS);
     expect(grid).toHaveLength(101);
     exp.forEach((v, i) => {
       const r = rows[i];
@@ -94,7 +95,7 @@ describe("100 Shortsów, długie transkrypcje, integralność", () => {
       const want = v.tr === "none" ? null : v.tr === "empty" ? "" : expectedText(v.text);
       expect(r.transcript).toBe(want);
       const c = grid[i + 1];
-      expect(c).toHaveLength(FIELDS.length);
+      expect(c).toHaveLength(CSV_FIELDS.length);
       const col = (k: string) => c[FIELDS.indexOf(k as any)];
       expect(c.slice(0, 6)).toEqual([v.title, String(v.dur), want ?? "", v.pub, r.url, v.views == null ? "" : String(v.views)]);
       expect([col("video_id"), col("likes"), col("comments_count")]).toEqual([v.id, v.likes == null ? "" : String(v.likes), v.comments == null ? "" : String(v.comments)]);
@@ -350,7 +351,7 @@ describe("integralność eksportu", () => {
     const f = await files(job_id);
     expect(f.csv).toContain("\r\n");
     const grid = parseCsv(f.csv.replace(/^﻿/, ""));
-    expect(grid.slice(1).every((r) => r.length === FIELDS.length)).toBe(true);
+    expect(grid.slice(1).every((r) => r.length === CSV_FIELDS.length)).toBe(true);
     expect(grid.slice(1).some((r) => r[0].includes("\n"))).toBe(true);
     expect(grid.slice(1).some((r) => r[2].includes("😀") && r[2].includes('"cytat"'))).toBe(true);
   });

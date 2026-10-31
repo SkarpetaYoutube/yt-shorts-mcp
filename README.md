@@ -30,6 +30,18 @@ komentarze `ok | disabled | unavailable | error | not_fetched | stale | not_requ
 `estimate`: ile transkrypcji jest już zapisanych, ile kredytów Supadata zużyje, ile jednostek YouTube pójdzie na komentarze.
 `continue_collection` rusza dalej.
 
+### Wersja 2.5: pełna wizja w eksporcie
+
+Wynik wizji każdej rolki trafia do wspólnego eksportu bez utraty szczegółów:
+- **JSON**: `vision` (zdjęcia, wiadomości przed/po, powiązania, niepewność, wiadomości z ekranu) oraz `vision.run`: model zażądany i faktyczny,
+  próba, HTTP, `finish_reason`, zużycie tokenów, parametry, `video_duration_s`, `no_images_found` i **oryginalna odpowiedź Gemini API bez zmian**
+  (`raw_response`, klucz zamaskowany) z `raw_response_sha256` i długością. Odpowiedź dłuższa niż 400 000 znaków nie jest dołączana
+  (`raw_response_status: omitted_too_large`); jest w bazie serwera i w `get_image_analysis`.
+- **CSV**: na końcu dwie nowe kolumny `vision_json` (cała znormalizowana wizja, bez oryginalnej odpowiedzi API) i `vision_json_chars`;
+  kolumna `vision` zawiera teraz też wiadomości przed/po, tekst na zdjęciu i niepewność. Excel i Arkusze obcinają komórki dłuższe niż 32 767 znaków – pełne dane są zawsze w JSON.
+- **Markdown**: linia z modelem, próbą, `finish_reason`, tokenami i SHA-256 oryginalnej odpowiedzi (sam tekst odpowiedzi tylko w JSON).
+- `status.json`: `counts.vision_status` (ile rolek `ok` / `not_analyzed` / `in_progress` / `failed:*`).
+
 ### Rozpoznawanie zdjęć w rolkach (Gemini, próbnie)
 
 `analyze_images` wysyła publiczny link rolki do Gemini API (`generateContent`, `fileData.fileUri` + `videoMetadata.fps`,

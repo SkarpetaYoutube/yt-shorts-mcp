@@ -2,8 +2,8 @@
 // ranking kanałowy oddzielony od rankingu zestawu, pliki CSV/JSON i paczka Markdown dla modelu (dzielona bez cięcia rolki).
 // Budowa idzie małymi krokami w alarmach: wybór (po jednym zadaniu) → kolejność → partie rekordów → finalizacja.
 import {
-  buildCsvBatch, buildJsonBatch, COLUMNS, csvCells, jsonObject, mdRecord, parseCsv, timedStatus, VISION_LIMITS_PL, FRAMES_UNAVAILABLE_PL,
-  type VisionExport, type VisionImage, type VisionLink,
+  buildCsvBatch, buildJsonBatch, CSV_COLUMNS, csvCells, jsonObject, mdRecord, parseCsv, timedStatus, VISION_LIMITS_PL, FRAMES_UNAVAILABLE_PL,
+  type VisionExport, type VisionImage, type VisionLink, type VisionRun,
   type ExportRecord, type HistoryPoint, type TimedSegment, type TopComment,
 } from "./csv";
 import { UserError } from "./types";
@@ -207,15 +207,41 @@ const str = (v: unknown): string | null => (typeof v === "string" && v.length ? 
 const msgList = (a: unknown): { t: string | null; sender: string | null; text: string }[] =>
   Array.isArray(a) ? a.map((m: any) => ({ t: str(m?.t), sender: str(m?.sender), text: String(m?.text ?? "") })) : [];
 
+/** Status wizji rolki bez wczytywania wyniku (tani odczyt): not_analyzed | in_progress | failed:<status> | ok. */
+export function loadVisionStatus(sql: SqlStorage, vid: string): string {
+  const rows = sql.exec("SELECT status FROM vis WHERE vid=? ORDER BY created DESC", vid).toArray();
+  if (!rows.length) return "not_analyzed";
+  if (rows.some((x) => String(x.status) === "ok")) return "ok";
+  return rows.some((x) => ["pending", "running"].includes(String(x.status))) ? "in_progress" : `failed:${String(rows[0].status)}`;
+}
+
+/** Oryginalna odpowiedź API dłuższa niż to nie jest dołączana do eksportu (wiersz bazy ma 2 MB); jest w bazie i w get_image_analysis. */
+export const RAW_EXPORT_MAX_CHARS = 400_000;
+
+function visionRun(rec: any, p: any): VisionRun {
+  const raw = typeof rec.raw === "string" ? rec.raw : null;
+  const status: VisionRun["raw_response_status"] = raw == null ? "not_stored" : raw.length > RAW_EXPORT_MAX_CHARS ? "omitted_too_large" : "included";
+  return {
+    run_id: String(rec.id), model_requested: str(rec.model_requested), model_version: str(rec.model_version),
+    attempt: typeof rec.attempt === "number" ? rec.attempt : null, http_status: typeof rec.http_status === "number" ? rec.http_status : null,
+    finish_reason: str(rec.finish_reason), usage: rec.usage ?? null, params: rec.params ?? null,
+    video_duration_s: typeof p?.video_duration_s === "number" ? p.video_duration_s : null,
+    no_images_found: typeof p?.no_images_found === "boolean" ? p.no_images_found : null,
+    raw_response_status: status, raw_response_chars: raw == null ? null : raw.length, raw_response_sha256: null,
+    raw_response: status === "included" ? raw : null,
+  };
+}
+
+/** Uzupełnia SHA-256 dołączonej oryginalnej odpowiedzi (hash jest asynchroniczny, więc poza buildRecord). */
+export async function attachRawHash(v: VisionExport | null): Promise<void> {
+  if (v && v.run.raw_response != null) v.run.raw_response_sha256 = await sha256Hex(v.run.raw_response);
+}
+
 /** Wynik wizji rolki z tej samej bazy: ostatni udany przebieg. Powiązania zostają oceną modelu (nie obserwacją człowieka). */
 export function loadVisionForExport(sql: SqlStorage, vid: string): { status: string; vision: VisionExport | null } {
-  const rows = sql.exec("SELECT state, status FROM vis WHERE vid=? ORDER BY created DESC", vid).toArray();
-  if (!rows.length) return { status: "not_analyzed", vision: null };
-  const okRow = rows.find((x) => String(x.status) === "ok");
-  if (!okRow) {
-    const live = rows.some((x) => ["pending", "running"].includes(String(x.status)));
-    return { status: live ? "in_progress" : `failed:${String(rows[0].status)}`, vision: null };
-  }
+  const status = loadVisionStatus(sql, vid);
+  if (status !== "ok") return { status, vision: null };
+  const okRow = sql.exec("SELECT state FROM vis WHERE vid=? AND status='ok' ORDER BY created DESC LIMIT 1", vid).toArray()[0];
   const rec = JSON.parse(String(okRow.state));
   const p = rec.parsed ?? {};
   const images: VisionImage[] = (Array.isArray(p.images) ? p.images : []).map((im: any) => ({
@@ -242,6 +268,7 @@ export function loadVisionForExport(sql: SqlStorage, vid: string): { status: str
     vision: {
       run_id: String(rec.id), model: str(rec.model_version) ?? str(rec.model_requested), fps: Number(rec.fps), api_seconds: rec.seconds == null ? null : Number(rec.seconds),
       analyzed_at: rec.done_at ? new Date(Number(rec.done_at)).toISOString() : null,
+      run: visionRun(rec, p),
       images, messages: msgList(p.messages),
       unclear_ranges: (Array.isArray(p.unclear_ranges) ? p.unclear_ranges : []).map((u: any) => ({ from: str(u?.from), to: str(u?.to), reason_pl: str(u?.reason_pl) })),
       notes_pl: str(p.notes_pl),
@@ -265,6 +292,8 @@ export const DEFINITIONS = {
   transcript_timed_status: "ok | no_transcript | no_segments_in_response (Supadata zwróciło sam tekst) | mismatch_not_stored (segmenty niezgodne z tekstem) | unknown_not_recorded (rekord sprzed zapisu przyczyny; segmentów w bazie brak)",
   vision_status: "ok (wynik jest) | not_analyzed (nie analizowano) | in_progress | failed:<status> (analiza nieudana). Opis zdjęć, czasy i powiązania to wynik modelu Gemini, niezweryfikowany przez człowieka; powiązanie „jawne” to ocena modelu, nie potwierdzona obserwacja",
   vision: "wynik analizy zdjęć i wiadomości (Gemini): zdjęcia z opisem, czasem, nadawcą, wiadomościami przed/po i powiązaniami (z oceną modelu), wiadomości odczytane z ekranu, brak obrazów (frames.available=false)",
+  vision_run: "vision.run (tylko JSON): dane techniczne przebiegu Gemini: model zażądany i faktyczny, próba, HTTP, finish_reason, zużycie tokenów, parametry, video_duration_s i no_images_found z odpowiedzi oraz oryginalna odpowiedź API w raw_response (bez zmian; klucz zamaskowany) z SHA-256 i długością. raw_response_status: included | not_stored | omitted_too_large (odpowiedź > 400000 znaków nie jest dołączana; jest w bazie serwera)",
+  vision_json: "tylko CSV: cała znormalizowana wizja rolki jako JSON (zdjęcia, wiadomości przed/po, powiązania, niepewność, wiadomości z ekranu, dane przebiegu bez oryginalnej odpowiedzi API, której pełny tekst jest tylko w JSON). Uwaga: Excel i Arkusze obcinają komórki dłuższe niż 32767 znaków; vision_json_chars to długość komórki, pełne dane zawsze są w pliku JSON",
   transcript_timed: "te same segmenty co transcript, z czasem startu i końca w sekundach (od Supadata); segmenty napisów YouTube mogą na siebie nachodzić",
   transcript_status: "ok | empty | no_captions (brak transkryptu) | error_video | error_service | no_credits (wyczerpane kredyty) | pending | pending_ai",
   comments_status: "ok | disabled (wyłączone) | unavailable | error (błąd usługi) | not_fetched | stale (z poprzedniego pomiaru) | not_requested",
@@ -583,9 +612,13 @@ export class SetBuilder {
       const item = this.sql.exec(`SELECT ${ITEM_COLS} FROM items WHERE job=? AND vid=?`, String(s.job), String(s.vid)).toArray()[0];
       if (!item) throw new UserError(`Rolka ${s.vid} zniknęła z zadania ${s.job} w trakcie eksportu (niespójny stan). Zbuduj eksport ponownie.`);
       const len = item.transcript == null ? 0 : String(item.transcript).length;
-      if (records.length && chars + 3 * len > BATCH_CHARS) break;
-      records.push({ r: buildRecord(this.sql, item, getJob(String(s.job)), nul(s.srank), setSize), pos: Number(s.pos) });
-      chars += 3 * len + (item.cmts == null ? 0 : String(item.cmts).length * 2) + 1500;
+      // wizja (wynik + oryginalna odpowiedź API) liczy się do rozmiaru partii: wiersz bazy ma 2 MB, a krok alarmu ograniczony czas CPU
+      const vlen = Number(this.sql.exec("SELECT length(state) AS n FROM vis WHERE vid=? AND status='ok' ORDER BY created DESC LIMIT 1", String(s.vid)).toArray()[0]?.n ?? 0);
+      if (records.length && chars + 3 * len + 2 * vlen > BATCH_CHARS) break;
+      const rec = buildRecord(this.sql, item, getJob(String(s.job)), nul(s.srank), setSize);
+      await attachRawHash(rec.vision);
+      records.push({ r: rec, pos: Number(s.pos) });
+      chars += 3 * len + 2 * vlen + (item.cmts == null ? 0 : String(item.cmts).length * 2) + 1500;
     }
     if (records.length) {
       const recs = records.map((x) => x.r);
@@ -594,7 +627,7 @@ export class SetBuilder {
       // weryfikacja po zbudowaniu: odczyt z powrotem i porównanie z rekordami źródłowymi
       const parsed = parseCsv(st.csvSeq === 0 ? csv.replace(/^﻿/, "") : csv);
       const body = st.csvSeq === 0 ? parsed.slice(1) : parsed;
-      if (st.csvSeq === 0 && parsed[0].join("|") !== COLUMNS.join("|")) throw new UserError("Weryfikacja eksportu: niepoprawny nagłówek CSV.");
+      if (st.csvSeq === 0 && parsed[0].join("|") !== CSV_COLUMNS.join("|")) throw new UserError("Weryfikacja eksportu: niepoprawny nagłówek CSV.");
       if (body.length !== recs.length) throw new UserError("Weryfikacja eksportu: liczba wierszy CSV różni się od liczby rekordów.");
       const jsParsed = JSON.parse("[" + js.replace(/^\[\n/, "").replace(/^,\n/, "") + "]");
       if (jsParsed.length !== recs.length) throw new UserError("Weryfikacja eksportu: liczba rekordów JSON różni się od źródła.");
@@ -640,20 +673,22 @@ export class SetBuilder {
     }
     const partOf = new Map<string, number>();
     for (const p of st.md.parts) for (const v of p.ids) partOf.set(v, p.n);
-    const counts: Record<string, Record<string, number>> = { transcript_status: {}, comments_status: {}, stats_status: {} };
+    const counts: Record<string, Record<string, number>> = { transcript_status: {}, comments_status: {}, stats_status: {}, vision_status: {} };
     const recs: any[] = [];
     for (const s of this.sql.exec("SELECT s.pos, s.job, s.vid, i.url, i.status, i.err, i.chars, i.hash, i.cstat, i.cmts, i.sstat, i.segs IS NOT NULL AS timed, i.sgst, CASE WHEN i.segs IS NULL THEN 0 ELSE json_array_length(i.segs) END AS nsegs FROM set_items s JOIN items i ON i.job=s.job AND i.vid=s.vid WHERE s.sid=? ORDER BY s.pos", st.id).toArray()) {
       const job = this.loadJob(String(s.job));
       const ts = String(s.status) === "error" ? "error_service" : String(s.status);
       const cs = !job.opts?.comments ? (s.cmts != null ? "ok" : "not_requested") : s.cstat == null ? (s.cmts != null ? "stale" : "not_fetched") : String(s.cstat);
       const ss = s.sstat == null ? "ok" : String(s.sstat);
+      const vs = loadVisionStatus(this.sql, String(s.vid));
+      counts.vision_status[vs] = (counts.vision_status[vs] ?? 0) + 1;
       counts.transcript_status[ts] = (counts.transcript_status[ts] ?? 0) + 1;
       counts.comments_status[cs] = (counts.comments_status[cs] ?? 0) + 1;
       counts.stats_status[ss] = (counts.stats_status[ss] ?? 0) + 1;
       recs.push({
         position: Number(s.pos) + 1, video_id: String(s.vid), url: String(s.url), channel_id: job.channel.channel_id, job_id: String(s.job),
         status: ts, error: s.err == null ? null : String(s.err), transcript_chars: s.chars == null ? null : Number(s.chars),
-        transcript_sha256: s.hash == null ? null : String(s.hash), transcript_timed: Number(s.timed) === 1, transcript_timed_segments: Number(s.nsegs ?? 0), transcript_timed_status: timedStatus(ts === "ok" || ts === "empty", Number(s.nsegs ?? 0), s.sgst == null ? null : String(s.sgst)), vision_status: loadVisionForExport(this.sql, String(s.vid)).status, comments_status: cs, stats_status: ss,
+        transcript_sha256: s.hash == null ? null : String(s.hash), transcript_timed: Number(s.timed) === 1, transcript_timed_segments: Number(s.nsegs ?? 0), transcript_timed_status: timedStatus(ts === "ok" || ts === "empty", Number(s.nsegs ?? 0), s.sgst == null ? null : String(s.sgst)), vision_status: vs, comments_status: cs, stats_status: ss,
         md_part: partOf.get(String(s.vid)) ?? null,
       });
     }

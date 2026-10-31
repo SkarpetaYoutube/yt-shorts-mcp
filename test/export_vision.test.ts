@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { buildWorld, installFetch, stub, drive, runExport, resetStore, setEnv, type World } from "./helpers";
-import { COLUMNS, parseCsv } from "../src/csv";
+import { COLUMNS, CSV_COLUMNS, parseCsv } from "../src/csv";
+import { RAW_EXPORT_MAX_CHARS } from "../src/sets";
 
 let w: World;
 const sql = async (q: string, ...args: unknown[]) =>
@@ -78,6 +79,91 @@ describe("eksport: wyniki wizji i status czasów", () => {
     // status
     const st = JSON.parse((await stub().exportChunks(job_id, "status")).join(""));
     expect(st.records.find((x: any) => x.video_id === target).vision_status).toBe("ok");
+  });
+
+  it("pełna wizja bez utraty: CSV (vision_json + czytelny tekst), JSON (vision.run z oryginalną odpowiedzią i SHA-256), Markdown (linia techniczna), liczniki w statusie", async () => {
+    const { job_id } = await stub().startJob({ channel: "@przyklad", mode: "newest", count: 5, transcriptMode: "native", lang: null });
+    expect((await drive(job_id)).complete).toBe(true);
+    const target = w.videos[1].id;
+    const rich = {
+      ...photo, text_in_image: "1+1=?", uncertainty_pl: "Zdjęcie widoczne krótko.",
+      messages_before: [{ t: "0:00.0", sender: "Dad", text: "Look at this, \"quote\", comma" }, { t: "0:00.5", sender: "Son", text: "=SUM(1)" }],
+    };
+    const payload = { video_duration_s: 30, messages: [{ t: "0:00.0", sender: "Son", text: "I need a controller!!!" }], images: [rich], no_images_found: false, unclear_ranges: [{ from: "0:10.0", to: "0:12.0", reason_pl: "rozmyte" }], notes_pl: "uwaga modelu" };
+    const bodyText = JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(payload) }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15 }, modelVersion: "gemini-3.5-flash-lite" });
+    w.gemini = () => new Response(bodyText, { status: 200 });
+    await stub().startVision({ video: target, fps: [1], model: "gemini-3.5-flash-lite" });
+    await finish();
+    await runExport(job_id);
+    const rows = JSON.parse((await stub().exportChunks(job_id, "json")).join(""));
+    const r = rows.find((x: any) => x.video_id === target);
+    // JSON: oryginalna odpowiedź API bez zmian + hash + dane techniczne
+    const run = r.vision.run;
+    expect(run.raw_response).toBe(bodyText);
+    expect(run.raw_response_status).toBe("included");
+    expect(run.raw_response_chars).toBe(bodyText.length);
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(bodyText));
+    expect(run.raw_response_sha256).toBe([...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join(""));
+    expect(run).toMatchObject({ model_requested: "gemini-3.5-flash-lite", model_version: "gemini-3.5-flash-lite", attempt: 1, http_status: 200, finish_reason: "STOP", video_duration_s: 30, no_images_found: false });
+    expect(run.usage.totalTokenCount).toBe(15);
+    expect(run.params.responseMimeType).toBe("application/json");
+    expect(JSON.parse(JSON.parse(run.raw_response).candidates[0].content.parts[0].text)).toEqual(payload); // z oryginału da się odtworzyć cały wynik
+    expect(r.vision.images[0].messages_before).toHaveLength(2);
+    // CSV: ta sama wizja w vision_json (bez surowej odpowiedzi), długość i czytelny tekst z wiadomościami przed/po
+    const grid = parseCsv((await stub().exportChunks(job_id, "csv")).join("").replace(/^﻿/, ""));
+    expect(grid[0]).toEqual([...CSV_COLUMNS]);
+    expect(CSV_COLUMNS.slice(0, COLUMNS.length)).toEqual([...COLUMNS]); // dotychczasowe kolumny na tych samych miejscach
+    const row = grid.slice(1).find((g) => g[COLUMNS.indexOf("video_id")] === target)!;
+    const cell = row[CSV_COLUMNS.indexOf("vision_json")];
+    const { raw_response: _omit, ...runNoRaw } = run;
+    expect(JSON.parse(cell)).toEqual({ ...r.vision, run: { ...runNoRaw, raw_response_note: expect.stringMatching(/tylko w pliku JSON/) } });
+    expect(row[CSV_COLUMNS.indexOf("vision_json_chars")]).toBe(String(cell.length));
+    expect(cell).not.toContain('"candidates"'); // surowej odpowiedzi w CSV nie ma (candidatesTokenCount w zużyciu to co innego)
+    const text = row[COLUMNS.indexOf("vision")];
+    expect(text).toMatch(/wiadomości przed: 0:00\.0 Dad: Look at this, "quote", comma \| 0:00\.5 Son: =SUM\(1\)/);
+    expect(text).toMatch(/wiadomości po: 0:00\.0 Son: I need a controller!!!/);
+    expect(text).toMatch(/tekst na zdjęciu: 1\+1=\?/);
+    expect(text).toMatch(/niepewność wg modelu: Zdjęcie widoczne krótko\./);
+    const none = grid.slice(1).find((g) => g[COLUMNS.indexOf("video_id")] === w.videos[3].id)!;
+    expect(none[CSV_COLUMNS.indexOf("vision_json")]).toBe("");
+    expect(none[CSV_COLUMNS.indexOf("vision_json_chars")]).toBe("");
+    // Markdown: linia techniczna z hashem, bez pełnej odpowiedzi
+    const md = (await stub().exportChunks(job_id, "md-1")).join("");
+    expect(md).toContain(`SHA-256 ${run.raw_response_sha256}`);
+    expect(md).toContain("finish_reason STOP");
+    expect(md).toContain("tokeny 15");
+    expect(md).not.toContain('"candidates"');
+    // status: liczniki wizji
+    const st = JSON.parse((await stub().exportChunks(job_id, "status")).join(""));
+    expect(st.counts.vision_status).toEqual({ ok: 1, not_analyzed: 4 });
+    expect(st.definitions.vision_json).toMatch(/32767/);
+    expect(st.definitions.vision_run).toMatch(/raw_response/);
+  });
+
+  it("oryginalna odpowiedź: brak w bazie = not_stored; zbyt duża nie jest dołączana, ale eksport działa, a partie zostają małe", async () => {
+    const { job_id } = await stub().startJob({ channel: "@przyklad", mode: "newest", count: 5, transcriptMode: "native", lang: null });
+    expect((await drive(job_id)).complete).toBe(true);
+    const [a, b, c, d] = [w.videos[0].id, w.videos[1].id, w.videos[3].id, w.videos[4].id];
+    w.gemini = () => ok({ video_duration_s: 30, messages: [], images: [photo], no_images_found: false, unclear_ranges: [], notes_pl: null });
+    await stub().startVision({ videos: [a, b, c, d], fps: [1], model: "gemini-3.5-flash-lite" });
+    await finish();
+    await sql("UPDATE vis SET state = json_set(state, '$.raw', NULL) WHERE vid=?", a);
+    await sql("UPDATE vis SET state = json_set(state, '$.raw', ?) WHERE vid=?", "x".repeat(RAW_EXPORT_MAX_CHARS + 1), b);
+    await sql("UPDATE vis SET state = json_set(state, '$.raw', ?) WHERE vid=?", "y".repeat(150_000), c); // duża, ale mieści się
+    await runExport(job_id);
+    const rows = JSON.parse((await stub().exportChunks(job_id, "json")).join(""));
+    const g = (id: string) => rows.find((x: any) => x.video_id === id).vision.run;
+    expect(g(a)).toMatchObject({ raw_response_status: "not_stored", raw_response: null, raw_response_chars: null, raw_response_sha256: null });
+    expect(g(b)).toMatchObject({ raw_response_status: "omitted_too_large", raw_response: null, raw_response_chars: RAW_EXPORT_MAX_CHARS + 1, raw_response_sha256: null });
+    expect(g(c).raw_response_status).toBe("included");
+    expect(g(c).raw_response).toBe("y".repeat(150_000));
+    expect(g(d).raw_response_status).toBe("included");
+    for (const fmt of ["json", "csv", "md-1"]) for (const ch of await stub().exportChunks(job_id, fmt)) expect(ch.length).toBeLessThan(900_000); // wiersz bazy ma 2 MB
+    const md = (await stub().exportChunks(job_id, "md-1")).join("");
+    expect(md).toContain("zbyt duża na eksport");
+    expect(md).toContain("oryginalnej odpowiedzi API nie zapisano");
+    const st = JSON.parse((await stub().exportChunks(job_id, "status")).join(""));
+    expect(st.counts.vision_status).toEqual({ ok: 4, not_analyzed: 1 });
   });
 
   it("nowy wynik wizji po eksporcie: te same parametry nie zwracają starego zestawu; bez zmian zestaw jest używany ponownie", async () => {
