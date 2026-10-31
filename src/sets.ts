@@ -63,6 +63,8 @@ interface SetState {
   notes: string[];
   partial: boolean;
   sources: { job_id: string; channel: Job["channel"]; mode: string; phase: string; rev: number; baseline: Baseline | null }[];
+  /** stan wyników wizji w chwili utworzenia zestawu (patrz visionSignature); brak w zestawach sprzed tej zmiany */
+  vis?: string;
   files?: Record<string, { records: number; bytes: number; sha256: string }>;
   error?: string;
   readyAt?: number;
@@ -329,10 +331,12 @@ export class SetBuilder {
     }
     const spec: SetSpec = { jobIds: ids, allowPartial: !!specIn.allowPartial, sortBy: specIn.sortBy, sortDir: specIn.sortDir, filters, mdPartChars: mdLimit, label: specIn.label ?? null };
     const key = JSON.stringify({ spec, revs: jobs.map((j) => [j.id, j.rev ?? 0, j.phase]) });
-    // ten sam zestaw (te same dane i parametry) gotowy albo w budowie: nie budujemy drugi raz
+    const vis = this.visionSignature(ids);
+    // ten sam zestaw (te same dane i parametry) gotowy albo w budowie: nie budujemy drugi raz.
+    // Gotowy zestaw jest używany ponownie tylko wtedy, gdy wyniki wizji nie zmieniły się od jego utworzenia (wizja nie zmienia wersji zadania).
     for (const r of this.sql.exec("SELECT id FROM sets WHERE phase != 'failed' ORDER BY updated DESC LIMIT 50").toArray()) {
       const st = this.load(String(r.id));
-      if (st && st.key === key) {
+      if (st && st.key === key && (st.phase !== "ready" || st.vis === vis)) {
         if (ids.length === 1) this.link(jobs[0], st.id);
         return this.info(st.id);
       }
@@ -345,12 +349,20 @@ export class SetBuilder {
         : `zestaw ${jobs.length} zadań: ${[...new Set(jobs.map((j) => j.channel.handle ?? j.channel.title))].join(", ")}`);
     const st: SetState = {
       id, key, created: Date.now(), spec, label, phase: "selecting", jobIdx: 0, rowOff: 0, total: 0, nextPos: 0, csvSeq: 0, jsonSeq: 0,
-      md: { limit: mdLimit, parts: [] }, duplicates: 0, notes: [], partial: unfinished.length > 0,
+      md: { limit: mdLimit, parts: [] }, duplicates: 0, notes: [], partial: unfinished.length > 0, vis,
       sources: jobs.map((j) => ({ job_id: j.id, channel: j.channel, mode: j.mode, phase: j.phase, rev: j.rev ?? 0, baseline: j.baseline ?? null })),
     };
     this.save(st);
     if (ids.length === 1) this.link(jobs[0], id);
     return this.info(id);
+  }
+
+  /** Stan wyników wizji dla rolek tych zadań: liczba przebiegów i czas ostatniej zmiany. Nowy albo zmieniony przebieg zmienia podpis. */
+  private visionSignature(jobIds: string[]): string {
+    const row = this.sql
+      .exec(`SELECT COUNT(*) AS n, COALESCE(MAX(updated), 0) AS u FROM vis WHERE vid IN (SELECT vid FROM items WHERE job IN (${jobIds.map(() => "?").join(",")}))`, ...jobIds)
+      .one();
+    return `${row.n}:${row.u}`;
   }
 
   private link(job: Job, setId: string): void {

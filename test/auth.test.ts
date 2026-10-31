@@ -187,6 +187,14 @@ describe("narzędzia MCP end-to-end (atrapy API) i linki do eksportu", () => {
     expect(rf.total_chars).toBeGreaterThan(5000);
     expect(rf.content.length).toBeLessThanOrEqual(5000);
     expect(rf.next_cursor).toBe(rf.content.length);
+    // ujemny kursor nie wycina końcówki pliku: czyta od początku; kolejne części Markdown (md-N) są czytelne; zły format jest odrzucony
+    const rneg = (await call(t, "export_collection", { read_file: "json", set_id: exp.set_id, cursor: -50, max_chars: 5000 })).data;
+    expect(rneg.cursor).toBe(0);
+    expect(rneg.content).toBe(rf.content);
+    expect((await call(t, "export_collection", { read_file: "md-1", set_id: exp.set_id, max_chars: 5000 })).data.file).toBe("md-1");
+    const bad = await call(t, "export_collection", { read_file: "../json", set_id: exp.set_id });
+    expect(bad.isError).toBe(true);
+    expect(bad.data.error).toMatch(/read_file/);
     const stt = await (await get(new URL(exp.download_links.status).pathname + new URL(exp.download_links.status).search)).json() as any;
     expect(stt.files.csv.sha256).toBe(exp.files.csv.sha256);
     // paczka Markdown i manifest: każdy plik pobrany z manifestu ma sumę SHA-256 z odpowiedzi narzędzia

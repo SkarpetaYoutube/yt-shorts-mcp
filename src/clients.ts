@@ -121,7 +121,11 @@ function explainYt(status: number, body: any): UserError {
   const err = body?.error ?? {};
   const reason: string = err.errors?.[0]?.reason ?? "";
   const message: string = err.message ?? "";
-  if (["quotaExceeded", "dailyLimitExceeded", "rateLimitExceeded"].includes(reason)) {
+  if (reason === "rateLimitExceeded") {
+    // limit TEMPA zapytań (na sekundę/minutę), nie dobowy: wystarczy chwilę poczekać
+    return new PauseError("Chwilowy limit tempa zapytań YouTube Data API (to nie dzienny limit). Poczekaj minutę i wznów zadanie; postęp jest zapisany.");
+  }
+  if (["quotaExceeded", "dailyLimitExceeded"].includes(reason)) {
     return new PauseError(
       "Wyczerpany dzienny limit YouTube Data API. Limit resetuje się o północy czasu pacyficznego (ok. 9:00 rano w Polsce). " +
         "Postęp zadania jest zapisany: wznów je po resecie.",
@@ -305,12 +309,19 @@ export async function fetchTopComments(s: Services, videoId: string, n = 5): Pro
 // ------------------------------------------------------------------------------ Supadata
 
 export class SupadataError extends UserError {
-  constructor(message: string, public status = 0, public code = "") {
+  constructor(message: string, public status = 0, public code = "", public details = "") {
     super(message);
   }
   /** Po takim błędzie nie ma sensu kontynuować (zły klucz, plan/kredyty, limit zapytań). */
   get fatal(): boolean {
     return [401, 402, 429].includes(this.status);
+  }
+  /**
+   * Wyczerpane kredyty planu. Supadata używa 429 `limit-exceeded` także dla limitu tempa zapytań, więc o kredytach świadczy dopiero
+   * `details` ("Plan usage limit was exceeded."); 429 bez rozpoznanego `details` nie jest uznawane za brak kredytów.
+   */
+  get creditsExhausted(): boolean {
+    return this.status === 402 || (this.status === 429 && /usage limit|credit|quota/i.test(this.details));
   }
 }
 
@@ -323,10 +334,14 @@ function explainSd(status: number, body: any): SupadataError {
     429: "Przekroczony limit zapytań lub kredytów Supadata.",
   };
   let text = hints[status] ?? `Błąd Supadata (${status})`;
-  const message = body?.message ?? body?.details ?? "";
+  const message = body?.message ?? "";
+  const details = String(body?.details ?? "");
   const code = body?.error ?? "";
-  if (message) text += ` [${code || status}: ${String(message).slice(0, 200)}]`;
-  return new SupadataError(text, status, String(code));
+  if (status === 429 && /usage limit|credit|quota/i.test(details)) text = "Wyczerpany limit kredytów planu Supadata.";
+  else if (status === 429 && /rate limit/i.test(details)) text = "Przekroczony limit tempa zapytań Supadata (to nie brak kredytów): poczekaj chwilę i wznów zadanie.";
+  const shown = [message, details].filter(Boolean).join(" — ");
+  if (shown) text += ` [${code || status}: ${shown.slice(0, 200)}]`;
+  return new SupadataError(text, status, String(code), details);
 }
 
 async function sdSend(s: Services, path: string, params: Record<string, string> | null, billable: boolean): Promise<Response> {

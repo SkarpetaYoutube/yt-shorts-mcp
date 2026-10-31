@@ -245,6 +245,37 @@ describe("statusy braków, ponawianie i szacunek kosztów", () => {
     expect(st2.complete).toBe(true);
     expect(w.calls.sd - before).toBe(6); // tylko brakujące
   });
+  it("429 limit tempa (details: rate limit): to nie brak kredytów — filmy zostają pending, zadanie staje, wznowienie kończy", async () => {
+    let calls = 0;
+    w.sdFail = () => (++calls > 4 ? new Response(JSON.stringify({ error: "limit-exceeded", message: "Limit Exceeded", details: "Request rate limit on current plan was exceeded." }), { status: 429, headers: { "retry-after": "0" } }) : null);
+    const { job_id } = await start(10, "newest", { comments: false });
+    const st = await drive(job_id);
+    expect(st.running).toBe(false);
+    expect(st.progress.ok).toBe(4);
+    expect(st.progress.no_credits).toBe(0);
+    expect(st.progress.pending).toBe(6);
+    expect(st.stopped_reason).toMatch(/tempa zapytań.*nie brak kredytów/);
+    w.sdFail = undefined;
+    await stub().resume(job_id, {});
+    const st2 = await drive(job_id);
+    expect(st2.complete).toBe(true);
+    expect(st2.progress.ok).toBe(10);
+  });
+  it("429 limit kredytów (details: Plan usage limit): status no_credits, wznowienie ponawia tylko brakujące", async () => {
+    let calls = 0;
+    w.sdFail = () => (++calls > 4 ? new Response(JSON.stringify({ error: "limit-exceeded", message: "Limit Exceeded", details: "Plan usage limit was exceeded." }), { status: 429, headers: { "retry-after": "0" } }) : null);
+    const { job_id } = await start(10, "newest", { comments: false });
+    const st = await drive(job_id);
+    expect(st.running).toBe(false);
+    expect(st.progress.ok).toBe(4);
+    expect(st.progress.no_credits).toBe(6);
+    expect(st.stopped_reason).toMatch(/limit kredytów/);
+    w.sdFail = undefined;
+    const before = w.calls.sd;
+    await stub().resume(job_id, {});
+    expect((await drive(job_id)).complete).toBe(true);
+    expect(w.calls.sd - before).toBe(6);
+  });
   it("błąd usługi (5xx) → error_service; błąd filmu (404) → error_video; komentarze 500 → error; retry_failed ponawia tylko je", async () => {
     const bad = w.videos[1].id, gone = w.videos[2].id, cbad = w.videos[3].id;
     let fix = false;

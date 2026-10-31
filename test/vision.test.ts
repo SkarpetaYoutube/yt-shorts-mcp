@@ -165,15 +165,42 @@ describe("rozpoznawanie zdjęć (Gemini) – atrapa API", () => {
     expect(b.table[0].source).toMatch(/nowy pomiar/);
     expect(b.wall_seconds).toBeGreaterThan(0);
   });
+  it("zlecenie dodane w trakcie wiszącego wywołania nie czeka na jego koniec (wolny wątek podejmuje je w tym samym alarmie)", async () => {
+    await setEnv({ GEMINI_API_KEY: KEY, GEMINI_CONCURRENCY: "2" });
+    const A = "VbJLBRLiu_U", B = "AAAAAAAAAAA";
+    let release!: () => void;
+    const hang = new Promise<void>((r) => { release = r; });
+    // wywołanie dla A wisi do chwili release(), dla B odpowiedź jest natychmiast
+    w.gemini = ((_fps: number, body: any) => (String(body.contents[0].parts[0].fileData.fileUri).endsWith(A) ? hang.then(() => ok(result([], []))) : ok(result([], [])))) as any;
+    const statusOf = async (vid: string) =>
+      (await (runInDurableObject as any)(stub(), (inst: any) => inst.ctx.storage.sql.exec("SELECT status FROM vis WHERE vid=? ORDER BY created DESC", vid).toArray()))[0]?.status;
+    const until = async (vid: string, want: string, ms: number) => {
+      for (let t = 0; t < ms; t += 100) { if ((await statusOf(vid)) === want) return true; await new Promise((r) => setTimeout(r, 100)); }
+      return false;
+    };
+    await stub().startVision({ video: A, fps: [1], model: null });
+    const alarm = runDurableObjectAlarm(stub()); // alarm utknie na wywołaniu A
+    try {
+      expect(await until(A, "running", 5000)).toBe(true);
+      await stub().startVision({ video: B, fps: [1], model: null }); // dodane, gdy A wisi
+      expect(await until(B, "ok", 8000)).toBe(true); // B kończy się, zanim A zostanie zwolnione
+      expect(await statusOf(A)).toBe("running");
+    } finally {
+      release();
+      await alarm;
+    }
+    expect(await statusOf(A)).toBe("ok");
+  });
   it("odstęp między startami jest zachowany", async () => {
-    await setEnv({ GEMINI_API_KEY: KEY, GEMINI_MIN_START_INTERVAL_MS: "120", GEMINI_CONCURRENCY: "2" });
+    // odstęp 400 ms i zapas 100 ms na rozrzut planisty: przy 120/100 ms test losowo zawodził pod obciążeniem komputera (mierzymy czas wywołania atrapy, nie moment zapisu startu w kolejce)
+    await setEnv({ GEMINI_API_KEY: KEY, GEMINI_MIN_START_INTERVAL_MS: "400", GEMINI_CONCURRENCY: "2" });
     const starts: number[] = [];
     w.gemini = () => { starts.push(Date.now()); return ok(result([], [])); };
     await stub().startVision({ videos: V.slice(0, 3), fps: [1], model: null });
     await finish();
     expect(starts).toHaveLength(3);
-    expect(starts[1] - starts[0]).toBeGreaterThanOrEqual(100);
-    expect(starts[2] - starts[1]).toBeGreaterThanOrEqual(100);
+    expect(starts[1] - starts[0]).toBeGreaterThanOrEqual(300);
+    expect(starts[2] - starts[1]).toBeGreaterThanOrEqual(300);
   });
   it("429: wstrzymanie wg Retry-After i ponowienie, bez przekroczenia limitu prób", async () => {
     await setEnv({ GEMINI_API_KEY: KEY, GEMINI_MAX_ATTEMPTS: "2" });

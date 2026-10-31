@@ -1,6 +1,7 @@
 # Etap 2: sekrety trafiaja WYLACZNIE do Cloudflare Secrets. Wpisujesz je tutaj, w terminalu (ukryte), nie w rozmowie.
 $ErrorActionPreference = "Stop"
-Set-Location $PSScriptRoot
+$ROOT = if (Test-Path (Join-Path $PSScriptRoot "wrangler.jsonc")) { $PSScriptRoot } else { Split-Path $PSScriptRoot -Parent }
+Set-Location $ROOT
 function PutSecret($name, $value) {
   $value | npx wrangler secret put $name | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "Nie udalo sie ustawic $name" }
@@ -15,7 +16,7 @@ function Ask($prompt) {
   Write-Host "  przyjeto wartosc o dlugosci $($v.Length) znakow"
   return $v
 }
-$login = Read-Host "Twoj login GitHub (jedyne konto z dostepem)"
+$login = Read-Host "Twoj login GitHub albo numeryczne ID konta (jedyne konto z dostepem; ID jest bezpieczniejsze, bo login mozna zmienic i przejac)"
 PutSecret "ALLOWED_GITHUB_USERS" $login
 $bytes = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
 PutSecret "SIGNING_KEY" ([Convert]::ToBase64String($bytes))

@@ -23,7 +23,8 @@ if (-not $key) {
 if (-not $key) { throw "Brak klucza." }
 
 $prompt = [IO.File]::ReadAllText((Join-Path $PSScriptRoot "gemini_prompt.txt"), [Text.Encoding]::UTF8)
-$outDir = Join-Path $PSScriptRoot "wyniki\gemini"
+$ROOT = if (Test-Path (Join-Path $PSScriptRoot "wrangler.jsonc")) { $PSScriptRoot } else { Split-Path $PSScriptRoot -Parent }
+$outDir = Join-Path $ROOT "wyniki\gemini"
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$($Model):generateContent"
 

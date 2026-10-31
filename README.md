@@ -33,7 +33,7 @@ komentarze `ok | disabled | unavailable | error | not_fetched | stale | not_requ
 ### Rozpoznawanie zdjęć w rolkach (Gemini, próbnie)
 
 `analyze_images` wysyła publiczny link rolki do Gemini API (`generateContent`, `fileData.fileUri` + `videoMetadata.fps`,
-domyślnie przebiegi 1 i 5 klatek/s, model `gemini-3.8-flash`) i zapisuje: model i wersję, parametry, czas, status HTTP,
+domyślnie jeden przebieg 1 klatka/s, model `gemini-3.6-flash`; `fps` i `model` można podać) i zapisuje: model i wersję, parametry, czas, status HTTP,
 surową odpowiedź albo rzeczywisty błąd, zużycie tokenów i wynik (wiadomości z ekranu, zdjęcia z czasem, opisem, wiadomościami
 przed/po, powiązaniami „wprost”/„PRZYPUSZCZENIE”, niepewnościami). `get_image_analysis` pokazuje wyniki, porównanie przebiegów
 (co wykryto w obu, a co tylko w jednym) i linki do surowego JSON i czytelnego opisu. Gemini zwraca tylko tekst – **plików

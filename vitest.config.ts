@@ -22,5 +22,6 @@ export default defineConfig({
       },
     }),
   ],
-  test: { include: ["test/**/*.test.ts"], testTimeout: 60000 },
+  // fileParallelism: false: pliki testów idą jeden po drugim (równoległe uruchamianie kilku instancji workerd losowo zawieszało start puli: „Timeout starting cloudflare-pool runner”)
+  test: { include: ["test/**/*.test.ts"], testTimeout: 60000, fileParallelism: false },
 });

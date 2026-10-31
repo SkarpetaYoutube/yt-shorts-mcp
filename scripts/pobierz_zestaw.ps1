@@ -7,7 +7,8 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $safe = ($Nazwa -replace '[^\w\-]', '_')
-$dir = Join-Path $PSScriptRoot (Join-Path "wyniki" $safe)
+$ROOT = if (Test-Path (Join-Path $PSScriptRoot "wrangler.jsonc")) { $PSScriptRoot } else { Split-Path $PSScriptRoot -Parent } # wyniki zawsze w korzeniu projektu, takze gdy skrypt lezy w scripts\
+$dir = Join-Path $ROOT (Join-Path "wyniki" $safe)
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 $m = Invoke-RestMethod -Uri $Manifest -UseBasicParsing
 $ok = 0; $bad = 0

@@ -152,18 +152,24 @@ export function visionToText(v: VisionExport | null): string {
   return L.join("\n");
 }
 
+/**
+ * Ochrona przed wstrzyknięciem formuł (Excel/Arkusze): tekst z zewnątrz (tytuł, transkrypt, komentarze…) zaczynający się od = + - @ albo tabulatora/CR
+ * dostaje na początku apostrof. Dotyczy tylko pól tekstowych w CSV; JSON i Markdown zostają bez zmian, liczby i identyfikatory też.
+ */
+export const csvSafe = (s: string): string => (/^[=+\-@\t\r]/.test(s) ? "'" + s : s);
+
 /** Komórki CSV jednego rekordu (bez cytowania) – wspólne dla budowy i weryfikacji. */
 export function csvCells(r: ExportRecord): string[] {
   return [
-    r.title, String(r.duration_seconds), r.transcript ?? "", r.published_at, r.url, n(r.views),
-    r.video_id, r.channel_id, r.channel_title, r.channel_handle ?? "", r.measured_at ?? "",
+    csvSafe(r.title), String(r.duration_seconds), csvSafe(r.transcript ?? ""), r.published_at, r.url, n(r.views),
+    r.video_id, r.channel_id, csvSafe(r.channel_title), r.channel_handle ?? "", r.measured_at ?? "",
     n(r.likes), n(r.comments_count),
     n(r.channel_views_rank), n(r.channel_shorts_ranked), b(r.top_5_percent_channel), b(r.above_channel_norm), n(r.views_vs_channel_median),
     n(r.set_views_rank), n(r.set_size),
     n(r.views_prev), r.views_prev_at ?? "", n(r.views_gain), n(r.views_gain_per_day), historyToText(r.views_history),
     r.transcript_status, r.comments_status, r.comments_fetched_at ?? "", r.stats_status,
-    commentsToText(r.top_comments_relevance), timedToText(r.transcript_timed),
-    r.transcript_timed_status, r.vision_status, visionToText(r.vision),
+    csvSafe(commentsToText(r.top_comments_relevance)), timedToText(r.transcript_timed),
+    r.transcript_timed_status, r.vision_status, csvSafe(visionToText(r.vision)),
   ];
 }
 

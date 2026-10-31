@@ -149,7 +149,7 @@ export const TOOLS = [
 /** Ostatnia linia obrony: wartości sekretów nigdy nie trafią do odpowiedzi, nawet jeśli zewnętrzne API je odbije w błędzie. */
 export function redact(env: Env, msg: string): string {
   let out = msg;
-  for (const v of [env.YOUTUBE_API_KEY, env.SUPADATA_API_KEY, env.GITHUB_CLIENT_SECRET, env.SIGNING_KEY]) if (v && v.length >= 8) out = out.split(v).join("[ukryte]");
+  for (const v of [env.YOUTUBE_API_KEY, env.SUPADATA_API_KEY, env.GITHUB_CLIENT_SECRET, env.SIGNING_KEY, env.GEMINI_API_KEY]) if (v && v.length >= 8) out = out.split(v).join("[ukryte]");
   return out;
 }
 
@@ -288,12 +288,13 @@ export async function dispatch(env: Env, origin: string, st: any, name: string, 
     case "export_collection": {
       // odczyt gotowego pliku eksportu przez to samo narzędzie (linki do plików bywają niedostępne z sesji Claude): set_id + read_file
       if (a.read_file != null) {
-        const fmt = oneOf(a.read_file, "read_file", ["json", "csv", "status", "md-1", "md-2", "md-3", "md-4", "md-5", "md-6"] as const, "json");
+        const fmt = String(a.read_file);
+        if (!/^(json|csv|status|md-\d{1,3})$/.test(fmt)) throw new UserError("Parametr read_file: dozwolone json, csv, status, md-1, md-2, … (kolejne części paczki Markdown).");
         const setId = str(a.set_id, "set_id");
         const chunks = await st.exportChunks(setId!, fmt);
         if (!chunks) throw new UserError("Nie ma takiego pliku eksportu (zły set_id/read_file albo zestaw wygasł).");
         const all = chunks.join("");
-        const cur = a.cursor == null ? 0 : int(a.cursor, "cursor", 0);
+        const cur = a.cursor == null ? 0 : Math.max(0, int(a.cursor, "cursor", 0));
         const max = a.max_chars == null ? 60000 : Math.min(120000, Math.max(5000, int(a.max_chars, "max_chars", 60000)));
         let end = Math.min(all.length, cur + max);
         if (end < all.length) { const c = all.charCodeAt(end - 1); if (c >= 0xd800 && c <= 0xdbff) end--; } // nie rozcinaj pary zastępczej UTF-16

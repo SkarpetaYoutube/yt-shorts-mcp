@@ -9,7 +9,8 @@ param(
   [string]$ShaJson
 )
 $ErrorActionPreference = "Stop"
-$dir = Join-Path $PSScriptRoot "wyniki\$Kanal"
+$ROOT = if (Test-Path (Join-Path $PSScriptRoot "wrangler.jsonc")) { $PSScriptRoot } else { Split-Path $PSScriptRoot -Parent }
+$dir = Join-Path $ROOT "wyniki\$Kanal"
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 $stamp = Get-Date -Format "yyyyMMdd_HHmm"
 function Get-One($url, $ext, $sha) {

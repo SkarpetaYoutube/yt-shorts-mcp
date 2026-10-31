@@ -96,6 +96,8 @@ const num = (v: string | undefined, d: number) => {
   return Number.isFinite(n) ? n : d;
 };
 
+const HOUSEKEEPING_MS = 24 * 3600_000; // odstęp alarmu porządkowego, gdy nic innego nie czeka
+const PRUNE_EVERY_MS = 6 * 3600_000; // najczęstsze uruchamianie retencji z alarmu
 const MAX_ROW_CHARS = 1_500_000; // limit wiersza SQLite w DO to 2 MB; zostawiamy zapas
 /** Najdłuższy czas przechowywania statystyk i danych z YouTube API (zasady YouTube API Services: 30 dni). */
 export const STATS_MAX_DAYS = 30;
@@ -258,6 +260,14 @@ export class Store extends DurableObject<Env> {
     sql.exec("DELETE FROM cache WHERE exp < ?", Date.now());
     sql.exec("DELETE FROM snaps WHERE at < ?", Date.now() - STATS_MAX_DAYS * 86400_000);
     sql.exec("DELETE FROM budget WHERE day < ?", new Date(Date.now() - 3 * 86400_000).toISOString().slice(0, 10));
+  }
+
+  /** Retencja nie zależy od aktywności użytkownika: z alarmu (także codziennego, patrz koniec alarm()) czyści dane starsze niż 30 dni najwyżej co 6 h. */
+  private pruneIfDue(): void {
+    const last = Number(this.kvGet("last_prune") ?? 0);
+    if (Date.now() - last < PRUNE_EVERY_MS) return;
+    this.kvSet("last_prune", String(Date.now()));
+    this.prune();
   }
 
   // --------------------------------------------------------------------------- RPC: zadania
@@ -447,6 +457,7 @@ export class Store extends DurableObject<Env> {
 
   override async alarm(): Promise<void> {
     const sql = this.ctx.storage.sql;
+    this.pruneIfDue();
     let again = false;
     let delay = num(this.env.ALARM_DELAY_MS, 500);
     // 1) zestawy eksportu (kroki bez sieci). Jeden rodzaj pracy na alarm, by nie przekroczyć limitu CPU planu Free.
@@ -497,6 +508,7 @@ export class Store extends DurableObject<Env> {
       }
     }
     if (again) await this.scheduleAlarm(delay);
+    else await this.scheduleAlarm(HOUSEKEEPING_MS); // codzienny alarm porządkowy: retencja 30 dni działa także bez nowej aktywności
   }
 
   // ------------------------------------------------------------------- wyliczanie filmów
@@ -726,8 +738,7 @@ export class Store extends DurableObject<Env> {
           if (!("cached" in res && res.cached) && itemDelay > 0) await new Promise((x) => setTimeout(x, itemDelay)); // spokojne tempo
         } catch (e) {
           if (e instanceof SupadataError) {
-            const credits = e.status === 402 || (e.status === 429 && /limit/i.test(`${e.code} ${e.message}`));
-            if (credits) {
+            if (e.creditsExhausted) {
               // wyczerpane kredyty: ten i wszystkie dalsze filmy dostają jawny status; wznowienie ponowi tylko je
               sql.exec("UPDATE items SET status='no_credits', err=? WHERE job=? AND status='pending'", e.message, job.id);
               throw e;
@@ -1228,6 +1239,7 @@ export class Store extends DurableObject<Env> {
     const cfg = this.visCfg();
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     let launched = 0;
+    let inflight = 0; // wywołania Gemini w toku w tym alarmie (wolny wątek nie kończy pracy, dopóki któreś trwa)
     const MAX_CALLS = 40;
     const t0 = Date.now();
     this.kvSet("last_alarm", String(t0));
@@ -1237,7 +1249,12 @@ export class Store extends DurableObject<Env> {
         if (launched >= MAX_CALLS || Date.now() - t0 > 8 * 60_000) return;
         const now = Date.now();
         const cands = sql.exec("SELECT id, next_at, json_extract(state,'$.model_requested') AS model FROM vis WHERE status='pending' ORDER BY created ASC LIMIT 100").toArray();
-        if (!cands.length) return;
+        if (!cands.length) {
+          // Kolejka jest pusta, ale inne wywołanie jeszcze trwa (do 5 min). Zlecenie dodane w tym czasie czekałoby na jego koniec
+          // (kolejny alarm startuje dopiero po zakończeniu bieżącego), więc wolny wątek sprawdza kolejkę dalej.
+          if (inflight > 0) { await sleep(1000); continue; }
+          return;
+        }
         let row: any = null;
         let soonest = Infinity;
         for (const c of cands) {
@@ -1275,12 +1292,15 @@ export class Store extends DurableObject<Env> {
         launched++;
         this.vis.starts.push(Date.now());
         this.vis.starts = this.vis.starts.slice(-50);
+        inflight++;
         try {
           await runGemini(rec, key, (u, i) => fetch(u, i));
         } catch (e) {
           rec.status = "error";
           rec.error = e instanceof UserError ? e.message : `Wewnętrzny błąd (${(e as Error)?.name})`;
           rec.done_at = Date.now();
+        } finally {
+          inflight--;
         }
         this.visFinish(rec);
       }

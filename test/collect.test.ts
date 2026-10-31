@@ -219,6 +219,25 @@ describe("wznawianie, restarty, ponawianie", () => {
     expect(usage.supadata_credits_today).toBe(0); // zwrot rezerwacji przy błędzie
   });
 
+  it("retencja 30 dni działa z alarmu (także bez nowej aktywności) i zostaje zaplanowany alarm porządkowy", async () => {
+    const { job_id } = await start(5);
+    expect((await drive(job_id)).complete).toBe(true);
+    const old = Date.now() - 40 * 86400_000;
+    await (runInDurableObject as any)(stub(), (inst: any) => {
+      const sql = inst.ctx.storage.sql;
+      sql.exec("UPDATE jobs SET created=?, state=json_set(state,'$.created',?,'$.completedAt',?)", old, old, old);
+      sql.exec("DELETE FROM vis_state WHERE k='last_prune'");
+    });
+    expect(await runDurableObjectAlarm(stub())).toBe(true); // alarm porządkowy z końca poprzedniego alarmu
+    const left = await (runInDurableObject as any)(stub(), (inst: any) => ({
+      jobs: inst.ctx.storage.sql.exec("SELECT COUNT(*) AS n FROM jobs").one().n,
+      items: inst.ctx.storage.sql.exec("SELECT COUNT(*) AS n FROM items").one().n,
+    }));
+    expect(Number(left.jobs)).toBe(0);
+    expect(Number(left.items)).toBe(0);
+    expect(await (runInDurableObject as any)(stub(), (inst: any) => inst.ctx.storage.getAlarm())).not.toBeNull(); // kolejny alarm porządkowy
+  });
+
   it("429 z Supadata: ponowienie z retry-after, potem zatrzymanie z możliwością wznowienia", async () => {
     let n = 0;
     w.sdFail = () => (n++ < 99 ? new Response(JSON.stringify({ error: "limit" }), { status: 429, headers: { "retry-after": "0" } }) : null);

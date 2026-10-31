@@ -1,6 +1,6 @@
 {
   // Zdalny MCP (YouTube Data API v3 + Supadata) na Cloudflare Workers Free.
-  // Brak sekretĂłw w tym pliku: klucze trafiajÄ… do `wrangler secret put` (patrz README.md).
+  // Brak sekretów w tym pliku: klucze trafiają do `wrangler secret put` (patrz README.md).
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "yt-mcp",
   "main": "src/index.ts",
@@ -15,15 +15,13 @@
     "GEMINI_DAILY_CALLS": "250",
     "GEMINI_CONCURRENCY": "2",
     // Limity planu Free z AI Studio → Rate limit (projekt research-firm, odczytane 2026-10-26); liczone także dla ponowień
-    "GEMINI_MODEL_LIMITS": "{\"gemini-3.6-flash\":{\"rpm\":5,\"tpm\":250000,\"rpd\":20},\"gemini-3.8-flash\":{\"rpm\":5,\"tpm\":250000,\"rpd\":20},\"gemini-3.5-flash-lite\":{\"rpm\":15,\"tpm\":250000,\"rpd\":500},\"gemini-3.1-flash-lite\":{\"rpm\":15,\"tpm\":250000,\"rpd\":500}}",
-    // Partia zatrzymana na polecenie użytkownika (nie wznawiać); można usunąć po wdrożeniu
-    "GEMINI_CANCEL_BATCHES": "b-2dc3e63e6c3d499c"
+    "GEMINI_MODEL_LIMITS": "{\"gemini-3.6-flash\":{\"rpm\":5,\"tpm\":250000,\"rpd\":20},\"gemini-3.8-flash\":{\"rpm\":5,\"tpm\":250000,\"rpd\":20},\"gemini-3.5-flash-lite\":{\"rpm\":15,\"tpm\":250000,\"rpd\":500},\"gemini-3.1-flash-lite\":{\"rpm\":15,\"tpm\":250000,\"rpd\":500}}"
   },
 
-  // Wymagany przez bibliotekÄ™ OAuth (klienci, tokeny, zgody). Id uzupeĹ‚nia `wrangler kv namespace create OAUTH_KV`.
+  // Wymagany przez bibliotekę OAuth (klienci, tokeny, zgody). Id uzupełnia `wrangler kv namespace create OAUTH_KV`.
   "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "358f4ae16bc94f3bb45998bc9a8e3066" }],
 
-  // Jedyna baza: Durable Object z SQLite (dostÄ™pny w planie Free): zadania, transkrypcje, cache, limity, eksporty.
+  // Jedyna baza: Durable Object z SQLite (dostępny w planie Free): zadania, transkrypcje, cache, limity, eksporty.
   "durable_objects": { "bindings": [{ "name": "STORE", "class_name": "Store" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Store"] }]
 }

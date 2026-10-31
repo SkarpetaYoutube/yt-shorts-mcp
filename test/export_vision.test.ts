@@ -80,6 +80,43 @@ describe("eksport: wyniki wizji i status czasów", () => {
     expect(st.records.find((x: any) => x.video_id === target).vision_status).toBe("ok");
   });
 
+  it("nowy wynik wizji po eksporcie: te same parametry nie zwracają starego zestawu; bez zmian zestaw jest używany ponownie", async () => {
+    const { job_id } = await stub().startJob({ channel: "@przyklad", mode: "newest", count: 5, transcriptMode: "native", lang: null });
+    expect((await drive(job_id)).complete).toBe(true);
+    const target = w.videos[1].id;
+    const first = await runExport(job_id);
+    expect((await runExport(job_id)).set_id).toBe(first.set_id); // nic się nie zmieniło: ten sam zestaw
+    const before = JSON.parse((await stub().exportChunks(job_id, "json")).join("")).find((x: any) => x.video_id === target);
+    expect(before.vision_status).toBe("not_analyzed");
+    w.gemini = () => ok({ video_duration_s: 30, messages: [{ t: "0:00.0", sender: "Son", text: "I need a controller!!!" }], images: [photo], no_images_found: false, unclear_ranges: [], notes_pl: null });
+    await stub().startVision({ video: target, fps: [1], model: "gemini-3.5-flash-lite" });
+    await finish();
+    const after = await runExport(job_id);
+    expect(after.set_id).not.toBe(first.set_id); // wizja doszła po eksporcie: powstaje nowy zestaw
+    const row = JSON.parse((await stub().exportChunks(job_id, "json")).join("")).find((x: any) => x.video_id === target);
+    expect(row.vision_status).toBe("ok");
+    expect(row.vision.images).toHaveLength(1);
+    expect((await runExport(job_id)).set_id).toBe(after.set_id); // po zmianie znów stabilnie ten sam zestaw
+  });
+
+  it("CSV: tekst zaczynający się od = + - @ dostaje apostrof (ochrona przed formułami); JSON, liczby i ID bez zmian", async () => {
+    const { job_id } = await stub().startJob({ channel: "@przyklad", mode: "newest", count: 5, transcriptMode: "native", lang: null });
+    expect((await drive(job_id)).complete).toBe(true);
+    const [a, b, c] = [w.videos[0].id, w.videos[1].id, w.videos[3].id];
+    await sql("UPDATE items SET title=? WHERE vid=?", '=HYPERLINK("http://x","klik")', a);
+    await sql("UPDATE items SET title=? WHERE vid=?", "-2+3 to nie formuła, ale zaczyna się od minusa", b);
+    await runExport(job_id);
+    const grid = parseCsv((await stub().exportChunks(job_id, "csv")).join("").replace(/^﻿/, ""));
+    const cell = (vid: string, col: string) => grid.slice(1).find((g) => g[COLUMNS.indexOf("video_id")] === vid)![COLUMNS.indexOf(col as any)];
+    expect(cell(a, "title")).toBe(`'=HYPERLINK("http://x","klik")`);
+    expect(cell(b, "title")).toBe("'-2+3 to nie formuła, ale zaczyna się od minusa");
+    const normal = JSON.parse((await stub().exportChunks(job_id, "json")).join("")).find((x: any) => x.video_id === c);
+    expect(cell(c, "title")).toBe(normal.title); // zwykły tytuł bez zmian
+    const json = JSON.parse((await stub().exportChunks(job_id, "json")).join(""));
+    expect(json.find((x: any) => x.video_id === a).title).toBe('=HYPERLINK("http://x","klik")'); // JSON zostaje surowy
+    expect(cell(a, "views")).toBe(String(json.find((x: any) => x.video_id === a).views ?? "")); // liczby nietknięte
+  });
+
   it("status czasów: ok / brak transkryptu / przyczyna zapisana / rekord sprzed zapisu przyczyny; odczyt z bazy przez read_collection", async () => {
     const { job_id } = await stub().startJob({ channel: "@przyklad", mode: "newest", count: 5, transcriptMode: "native", lang: null });
     expect((await drive(job_id)).complete).toBe(true);
