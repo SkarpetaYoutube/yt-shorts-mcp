@@ -72,6 +72,10 @@ export const TOOLS = [
       "Zwraca podpisane linki, sumy SHA-256 i link manifest (lista wszystkich plików do pobrania jednym skryptem). Nie zwraca treści w odpowiedzi.",
     inputSchema: obj({
       job_id: jobId,
+      read_file: { type: "string", description: "Zamiast budować eksport: odczytaj plik gotowego zestawu (json, csv, status, md-1…) przez to narzędzie; wymaga set_id; dłuższe pliki porcjami (cursor, max_chars)" },
+      set_id: { type: "string", description: "Zestaw z poprzedniego eksportu (dla read_file)" },
+      cursor: { type: "integer", description: "Pozycja znaku, od której czytać (read_file)" },
+      max_chars: { type: "integer", description: "Maks. znaków w jednej odpowiedzi (read_file, domyślnie 60000)" },
       job_ids: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 20, description: "Kilka zadań (np. różne kanały) w jednym zestawie" },
       sort_by: {
         type: "string",
@@ -282,6 +286,19 @@ export async function dispatch(env: Env, origin: string, st: any, name: string, 
       return await st.refresh(id, { comments: a.comments !== false, channelStats: a.channel_stats ?? null });
     }
     case "export_collection": {
+      // odczyt gotowego pliku eksportu przez to samo narzędzie (linki do plików bywają niedostępne z sesji Claude): set_id + read_file
+      if (a.read_file != null) {
+        const fmt = oneOf(a.read_file, "read_file", ["json", "csv", "status", "md-1", "md-2", "md-3", "md-4", "md-5", "md-6"] as const, "json");
+        const setId = str(a.set_id, "set_id");
+        const chunks = await st.exportChunks(setId!, fmt);
+        if (!chunks) throw new UserError("Nie ma takiego pliku eksportu (zły set_id/read_file albo zestaw wygasł).");
+        const all = chunks.join("");
+        const cur = a.cursor == null ? 0 : int(a.cursor, "cursor", 0);
+        const max = a.max_chars == null ? 60000 : Math.min(120000, Math.max(5000, int(a.max_chars, "max_chars", 60000)));
+        let end = Math.min(all.length, cur + max);
+        if (end < all.length) { const c = all.charCodeAt(end - 1); if (c >= 0xd800 && c <= 0xdbff) end--; } // nie rozcinaj pary zastępczej UTF-16
+        return { set_id: setId, file: fmt, total_chars: all.length, cursor: cur, next_cursor: end < all.length ? end : null, content: all.slice(cur, end) };
+      }
       const ids: string[] = Array.isArray(a.job_ids) ? a.job_ids.map((x: unknown) => str(x, "job_ids")!) : [];
       if (a.job_id != null) ids.unshift(str(a.job_id, "job_id")!);
       if (!ids.length) throw new UserError("Podaj job_id albo job_ids.");
