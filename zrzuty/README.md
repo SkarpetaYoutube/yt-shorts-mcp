@@ -18,6 +18,8 @@ wyniki<Kanał><Kanał> - <Tytuł rolki> [<ID>]    dane.json  dane.csv  dane.md  
     zdjecia.md  zdjecia.json            status każdego zdjęcia (jest / brak zrzutu i dlaczego; „pełny” bez przeglądu wzrokowego = wg programu)
 wyniki<Kanał>_zbiorczo             eksport całego kanału (CSV / JSON / Markdown / status)
 wyniki<Kanał>_zrzuty_robocze       surowe zrzuty, manifest i logi; ponowne uruchomienie wznawia
+wyniki<Kanał>_zbiorczoindeks_rolek.csv/md  jedna linia na rolkę: statystyki, ranking, status zdjęć, folder
+wyniki<Kanał>_bazaaza_rolek.json/csv      lokalna baza kanału: scala kolejne eksporty (bez duplikatów), zachowuje historię wyświetleń
 ```
 Opcje: `-Tylko ID,ID` (wybrane rolki), `-BezZrzutow` (same dane, bez YouTube), `-BezDrugiejRundy`, `-MaxCalosc`, `-MaxRolka`, `-Wynik <folder>`. Kod wyjścia: 0 komplet, 2 część zdjęć bez zrzutu, 4 limit czasu.
 Sam rozkład na foldery bez przeglądarki: `node rozloz_na_rolki.mjs <folder_eksportu> <folder_zrzutow|-> <folder_wyjsciowy>`; test: `node test_rozloz.mjs`.
