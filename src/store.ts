@@ -89,6 +89,8 @@ export interface Job {
   estimate?: any;
   /** odświeżanie samych statystyk/komentarzy (bez transkrypcji) */
   refresh?: { startedAt: number; comments: boolean; via: "channel" | "items"; finishedAt?: number } | null;
+  /** partie wizji (analyze_images z job_id) zlecone dla rolek tego zadania; sam wynik wizji leży w tabeli vis, po ID rolki */
+  vision?: { batches: { batch_id: string; model: string; fps: number[]; started_at: string; runs: number }[] };
 }
 
 const num = (v: string | undefined, d: number) => {
@@ -390,13 +392,13 @@ export class Store extends DurableObject<Env> {
   async list(limit: number): Promise<any> {
     const rows = this.ctx.storage.sql.exec("SELECT id FROM jobs ORDER BY updated DESC LIMIT ?", Math.max(1, Math.min(limit, 50))).toArray();
     const out = rows.map((r) => {
-      const st = this.statusOf(this.loadJob(String(r.id)));
+      const st = this.statusOf(this.loadJob(String(r.id)), false);
       return { job_id: st.job_id, complete: st.complete, phase: st.phase, channel: st.channel, mode: st.mode, requested: st.requested, selected: st.selected, progress: st.progress };
     });
     return { collections: out };
   }
 
-  statusOf(job: Job): any {
+  statusOf(job: Job, withVision = true): any {
     const sql = this.ctx.storage.sql;
     const counts: Record<string, number> = Object.fromEntries(TRANSCRIPT_STATUSES.map((s) => [s, 0]));
     let total = 0;
@@ -420,6 +422,16 @@ export class Store extends DurableObject<Env> {
         fetched: c.ok ?? 0, disabled: c.disabled ?? 0, unavailable: c.unavailable ?? 0, error: c.error ?? 0, not_fetched: c.not_fetched ?? 0,
       };
     }
+    // wizja Gemini rolek tego zadania (osobna kolejka: analyze_images); liczone po ID rolki z tabeli vis
+    const vcount = (cond: string) => Number(sql.exec(`SELECT COUNT(*) AS n FROM items i WHERE i.job=? AND ${cond}`, job.id).one().n);
+    const hasOk = "EXISTS (SELECT 1 FROM vis v WHERE v.vid=i.vid AND v.status='ok')";
+    const hasLive = "EXISTS (SELECT 1 FROM vis v WHERE v.vid=i.vid AND v.status IN ('pending','running'))";
+    const hasAny = "EXISTS (SELECT 1 FROM vis v WHERE v.vid=i.vid)";
+    let vision: any = null; // list_collections nie liczy wizji (oszczędność CPU przy wielu zadaniach)
+    if (withVision) {
+      const vOk = vcount(hasOk), vLive = vcount(`NOT ${hasOk} AND ${hasLive}`), vFail = vcount(`NOT ${hasOk} AND NOT ${hasLive} AND ${hasAny}`);
+      vision = { ok: vOk, in_progress: vLive, failed: vFail, not_analyzed: total - vOk - vLive - vFail, batches: job.vision?.batches ?? [] };
+    }
     let next: string;
     if (job.awaiting === "confirm") next = "Szacunek kosztów gotowy (pole estimate). Jeśli się zgadzasz, wywołaj continue_collection, aby pobrać transkrypcje.";
     else if (done) next = "Gotowe. Wywołaj export_collection (CSV/JSON/Markdown) albo read_collection (czytanie w rozmowie).";
@@ -440,6 +452,7 @@ export class Store extends DurableObject<Env> {
       shortfall: job.shortfall,
       progress: { total, ...counts },
       comments,
+      vision,
       refresh: job.refresh ?? null,
       channel_baseline: job.baseline ?? null,
       enumeration: {
@@ -504,7 +517,7 @@ export class Store extends DurableObject<Env> {
       const vw = this.visionWaitMs();
       if (vw !== null) {
         again = true;
-        delay = Math.max(delay, Math.min(vw, 30_000)); // zaległe ponowienia: nie budzimy się częściej, niż trzeba
+        delay = Math.max(delay, Math.min(vw, vw > 600_000 ? 300_000 : 30_000)); // zaległe ponowienia: nie budzimy się częściej, niż trzeba (przy czekaniu na limit dobowy co 5 min)
       }
     }
     if (again) await this.scheduleAlarm(delay);
@@ -1037,7 +1050,16 @@ export class Store extends DurableObject<Env> {
     const pz = this.getPause(model);
     if (pz && pz.until > now) return { until: Math.max(pz.until, nextAt), kind: "pauza_429", reason: `pauza modelu po HTTP 429 (${pz.cause}); następna próba nie wcześniej niż ${iso(Math.max(pz.until, nextAt))}` };
     if (nextAt > now) return { until: nextAt, kind: "ponowienie", reason: `zaplanowane ponowienie po błędzie poprzedniej próby; nie wcześniej niż ${iso(nextAt)}` };
-    const lim = this.visCfg().limits[model];
+    const cfgB = this.visCfg();
+    if (cfgB.dailyCalls > 0) {
+      const used = budgetUsed(this.svc(), "gemini_calls", "UTC");
+      if (used >= cfgB.dailyCalls) {
+        const d = new Date(now);
+        const until = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) + 60_000;
+        return { until, kind: "limit_dobowy", reason: `dobowy bezpiecznik wywołań Gemini: ${used} z ${cfgB.dailyCalls} (doba UTC, liczy też ponowienia); rolka czeka w kolejce, następna próba nie wcześniej niż ${iso(until)}` };
+      }
+    }
+    const lim = cfgB.limits[model];
     if (!lim) return null;
     const sql = this.ctx.storage.sql;
     if (lim.rpm > 0) {
@@ -1097,7 +1119,7 @@ export class Store extends DurableObject<Env> {
    * ograniczona równoległość, odstępy między startami, automatyczne ponawianie błędów przejściowych (każda próba liczy się do limitu dziennego).
    * retryBatch: ponawia tylko rolki z tej partii, które nie mają udanego wyniku.
    */
-  async startVision(p: { video?: string; videos?: string[]; fps: number[]; model: string | null; retryBatch?: string | null; cancelBatch?: string | null }): Promise<any> {
+  async startVision(p: { video?: string; videos?: string[]; fps: number[]; model: string | null; retryBatch?: string | null; cancelBatch?: string | null; jobId?: string | null; estimateOnly?: boolean; skipDone?: boolean }): Promise<any> {
     if (!this.env.GEMINI_API_KEY) {
       throw new UserError("Rozpoznawanie zdjęć jest wyłączone: brak sekretu GEMINI_API_KEY w Cloudflare (Workers & Pages → yt-mcp → Settings → Variables and Secrets).");
     }
@@ -1127,14 +1149,14 @@ export class Store extends DurableObject<Env> {
       return { batch_id: batch, requeued_only_failed: queued.length, videos: queued, next_step: "get_image_analysis z batch_id." };
     }
     const refs = [...(p.videos ?? []), ...(p.video ? [p.video] : [])];
-    if (!refs.length) throw new UserError("Podaj video albo videos.");
+    if (p.jobId) {
+      if (refs.length) throw new UserError("Podaj albo job_id (wszystkie rolki zadania), albo video/videos.");
+      return await this.visionForJob(p.jobId, p.fps, p.model, p.estimateOnly !== false, p.skipDone !== false, cfg);
+    }
+    if (!refs.length) throw new UserError("Podaj video, videos albo job_id.");
     if (refs.length > 200) throw new UserError("Najwyżej 200 rolek w jednej partii.");
     const vids = [...new Set(refs.map((r) => videoIdFrom(r)))];
-    const fpsList = [...new Set(p.fps)];
-    if (!fpsList.length || fpsList.length > 4) throw new UserError("fps: od 1 do 4 wartości.");
-    for (const f of fpsList) if (!Number.isFinite(f) || f <= 0 || f > 60) throw new UserError("fps: liczba > 0 i <= 60 (rzeczywisty limit sprawdzi API).");
-    const model = p.model || this.env.GEMINI_MODEL || GEMINI_DEFAULT_MODEL;
-    if (!/^[a-z0-9.\-]+$/i.test(model)) throw new UserError("Nieprawidłowa nazwa modelu.");
+    const { fpsList, model } = this.visParams(p.fps, p.model);
     const batch = "b-" + crypto.randomUUID().replace(/-/g, "").slice(0, 16);
     const runs: { id: string; video_id: string; fps: number; status: string }[] = [];
     for (const vid of vids) {
@@ -1150,6 +1172,85 @@ export class Store extends DurableObject<Env> {
       concurrency: cfg.concurrency, daily_call_limit: cfg.dailyCalls, max_attempts: cfg.maxAttempts,
       next_step: "Wywołaj get_image_analysis (z video albo batch_id) za 30–120 s.",
     };
+  }
+
+  /** Walidacja fps i modelu wspólna dla analizy pojedynczych rolek i całego zadania. */
+  private visParams(fps: number[], modelIn: string | null): { fpsList: number[]; model: string } {
+    const fpsList = [...new Set(fps)];
+    if (!fpsList.length || fpsList.length > 4) throw new UserError("fps: od 1 do 4 wartości.");
+    for (const f of fpsList) if (!Number.isFinite(f) || f <= 0 || f > 60) throw new UserError("fps: liczba > 0 i <= 60 (rzeczywisty limit sprawdzi API).");
+    const model = modelIn || this.env.GEMINI_MODEL || GEMINI_DEFAULT_MODEL;
+    if (!/^[a-z0-9.\-]+$/i.test(model)) throw new UserError("Nieprawidłowa nazwa modelu.");
+    return { fpsList, model };
+  }
+
+  /**
+   * Wizja wszystkich rolek jednego zadania. Domyślnie tylko szacunek (estimate_only): nic nie jest zlecane.
+   * Rolki z gotowym wynikiem (skip_done) i te, które już czekają w kolejce, są pomijane, więc ponowne uruchomienie nie wydaje limitu drugi raz.
+   */
+  private async visionForJob(jobId: string, fpsIn: number[], modelIn: string | null, estimateOnly: boolean, skipDone: boolean, cfg: ReturnType<Store["visCfg"]>): Promise<any> {
+    const sql = this.ctx.storage.sql;
+    const { fpsList, model } = this.visParams(fpsIn, modelIn);
+    const job = this.loadJob(jobId);
+    const vids = sql.exec("SELECT vid FROM items WHERE job=? ORDER BY ord", jobId).toArray().map((r) => String(r.vid));
+    if (!vids.length) throw new UserError(`Zadanie ${jobId} nie ma jeszcze wybranych filmów (faza: ${job.phase}). Poczekaj na get_collection_status.`);
+    const pairs: { vid: string; fps: number }[] = [];
+    let alreadyDone = 0, alreadyQueued = 0;
+    for (const vid of vids) {
+      const runs = sql.exec("SELECT fps, status FROM vis WHERE vid=?", vid).toArray();
+      for (const f of fpsList) {
+        const mine = runs.filter((r) => Number(r.fps) === f);
+        if (mine.some((r) => ["pending", "running"].includes(String(r.status)))) { alreadyQueued++; continue; }
+        if (skipDone && mine.some((r) => String(r.status) === "ok")) { alreadyDone++; continue; }
+        pairs.push({ vid, fps: f });
+      }
+    }
+    const calls = pairs.length;
+    const svc = this.svc();
+    const usedToday = budgetUsed(svc, "gemini_calls", "UTC");
+    const lim = cfg.limits[model];
+    const modelUsed = budgetUsed(svc, `gemini_calls:${model}`, "America/Los_Angeles");
+    const globalLeft = Math.max(0, cfg.dailyCalls - usedToday);
+    const modelLeft = lim && lim.rpd > 0 ? Math.max(0, lim.rpd - modelUsed) : null;
+    const leftToday = modelLeft == null ? globalLeft : Math.min(globalLeft, modelLeft);
+    const perDay = Math.max(1, Math.min(cfg.dailyCalls, lim && lim.rpd > 0 ? lim.rpd : cfg.dailyCalls));
+    const days = calls === 0 ? 0 : calls <= leftToday ? 1 : 1 + Math.ceil((calls - leftToday) / perDay);
+    const hist = sql.exec("SELECT AVG(secs) AS s, AVG(tokens) AS t, COUNT(*) AS n FROM vis WHERE status='ok' AND secs IS NOT NULL AND json_extract(state,'$.model_requested')=?", model).toArray()[0];
+    const n = Number(hist?.n ?? 0);
+    const avgSecs = n ? Number(hist.s) : null, avgTok = n && hist.t != null ? Number(hist.t) : null;
+    const perCallMs = Math.max(cfg.minStartGapMs, avgSecs != null ? (avgSecs * 1000) / cfg.concurrency : 0);
+    const warnings: string[] = [];
+    if (calls > leftToday) warnings.push(`Dzisiejszy limit pozwala jeszcze na ${leftToday} wywołań, a potrzeba ${calls}: reszta czeka w kolejce do następnej doby (limit własny liczony w UTC, limit modelu w czasie pacyficznym).`);
+    if (calls && n === 0) warnings.push("Brak wcześniejszych udanych przebiegów tego modelu: czas i zużycie tokenów nie są szacowane.");
+    const est = {
+      job_id: jobId, channel: job.channel.handle ?? job.channel.title, model, fps: fpsList, skip_done: skipDone,
+      reels_in_job: vids.length, runs_already_done: alreadyDone, runs_already_queued: alreadyQueued, runs_to_analyze: calls,
+      calls_planned: calls, calls_worst_case_with_retries: calls * cfg.maxAttempts,
+      limits: {
+        daily_calls_limit: cfg.dailyCalls, calls_used_today: usedToday, calls_left_today: globalLeft,
+        model_daily_limit: lim && lim.rpd > 0 ? lim.rpd : null, model_calls_used_today: modelUsed, model_calls_left_today: modelLeft,
+        calls_possible_now: leftToday, calls_per_day_at_most: perDay,
+      },
+      days_needed_including_today: days,
+      time_estimate: avgSecs == null ? null : {
+        avg_call_seconds_from_past_runs: Math.round(avgSecs * 10) / 10, start_interval_s: cfg.minStartGapMs / 1000, concurrency: cfg.concurrency,
+        minutes_for_calls_possible_now: Math.round(((Math.min(calls, leftToday) * perCallMs) / 60000) * 10) / 10,
+      },
+      tokens_estimate: avgTok == null ? null : { avg_tokens_per_call_from_past_runs: Math.round(avgTok), total_for_planned_calls: Math.round(avgTok * calls) },
+      warnings,
+      note: "Gemini w planie darmowym nie kosztuje pieniędzy, ale każde wywołanie (także ponowienie po błędzie) zużywa dobowy limit. Szacunek nie zleca żadnych wywołań.",
+    };
+    if (estimateOnly) {
+      return { ...est, estimate_only: true, next_step: calls ? "Aby uruchomić, wywołaj analyze_images ponownie z tym samym job_id i estimate_only=false." : "Nic do zrobienia: wszystkie rolki mają wynik albo już czekają w kolejce." };
+    }
+    if (!calls) return { ...est, estimate_only: false, batch_id: null, next_step: "Nic do zlecenia: wszystkie rolki mają wynik albo już czekają w kolejce (get_collection_status, get_image_analysis)." };
+    const batch = "b-" + crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+    for (const pr of pairs) this.saveVis(this.newVisRecord(pr.vid, pr.fps, model, batch, 1, cfg.maxAttempts, null, 0));
+    const fresh = this.loadJob(jobId);
+    fresh.vision = { batches: [...(fresh.vision?.batches ?? []), { batch_id: batch, model, fps: fpsList, started_at: new Date().toISOString(), runs: calls }] };
+    this.saveJob(fresh);
+    await this.scheduleAlarm(0);
+    return { ...est, estimate_only: false, batch_id: batch, queued_runs: calls, next_step: "Postęp: get_collection_status (pole vision) albo get_image_analysis z batch_id. Gotowe wyniki trafiają do eksportu automatycznie." };
   }
 
   /** Najkrótszy czas (ms) do kolejnego zaległego przebiegu; null, gdy nic nie czeka; 0, gdy coś jest gotowe do startu. */

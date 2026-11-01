@@ -123,12 +123,16 @@ export const TOOLS = [
     name: "analyze_images",
     description:
       "Kolejka rozpoznawania zdjęć i wiadomości w rolkach przez Gemini API z publicznych linków YouTube (bez pobierania wideo). " +
-      "Jedna rolka (video) albo wiele (videos, do 200); domyślnie jeden przebieg na rolkę (fps 1). Kolejka ma ograniczoną równoległość, odstępy między startami " +
+      "Jedna rolka (video), wiele (videos, do 200) albo WSZYSTKIE rolki zadania (job_id): wtedy domyślnie tylko szacunek (estimate_only=true: ile wywołań, ile limitu zostało, ile dni, przybliżony czas i tokeny; nic nie jest zlecane), " +
+      "a po estimate_only=false rolki z gotowym wynikiem lub już w kolejce są pomijane (skip_done=true). Domyślnie jeden przebieg na rolkę (fps 1). Kolejka ma ograniczoną równoległość, odstępy między startami " +
       "i sama ponawia błędy przejściowe (503, 429, 524, połączenie); każde wywołanie, także ponowienie, liczy się do limitu dziennego. " +
       "retry_batch: ponawia tylko nieudane rolki z podanej partii. Wynik to materiał źródłowy (czasy przybliżone), bez ocen scenariusza i bez plików obrazów. Praca w tle: potem get_image_analysis.",
     inputSchema: obj({
       video: { type: "string", description: "Link do rolki lub 11-znakowe ID" },
       videos: { type: "array", items: { type: "string" }, maxItems: 200, description: "Wiele rolek (linki lub ID)" },
+      job_id: { type: "string", description: "Zamiast video/videos: wszystkie rolki tego zadania (job_id z collect_shorts). Domyślnie tylko szacunek." },
+      estimate_only: { type: "boolean", default: true, description: "Tylko z job_id: true = pokaż szacunek i nic nie zlecaj; false = zleć analizę rolek bez wyniku" },
+      skip_done: { type: "boolean", default: true, description: "Tylko z job_id: pomiń rolki, które mają już udany wynik dla tego fps (false = analizuj ponownie, zużywa limit)" },
       fps: { type: "array", items: { type: "number" }, minItems: 1, maxItems: 4, default: [1], description: "Częstotliwości próbkowania (klatek/s)" },
       model: { type: "string", description: "Model Gemini (domyślnie gemini-3.6-flash)" },
       retry_batch: { type: "string", description: "batch_id: ponów tylko nieudane rolki tej partii" },
@@ -268,7 +272,11 @@ export async function dispatch(env: Env, origin: string, st: any, name: string, 
       const fps = fpsRaw == null ? [1] : fpsRaw.map((x: unknown) => { const n = typeof x === "string" ? Number(x) : x; if (typeof n !== "number" || !isFinite(n)) throw new UserError("fps: liczby."); return n; });
       const videosRaw = asList(a.videos);
       const videos = videosRaw?.map((x: unknown) => str(x, "videos")!);
-      return await st.startVision({ video: str(a.video, "video", false) ?? undefined, videos, fps, model: str(a.model, "model", false), retryBatch: str(a.retry_batch, "retry_batch", false), cancelBatch: str(a.cancel_batch, "cancel_batch", false) });
+      for (const k of ["estimate_only", "skip_done"]) if (a[k] != null && typeof a[k] !== "boolean") throw new UserError(k + ": true albo false.");
+      return await st.startVision({
+        video: str(a.video, "video", false) ?? undefined, videos, fps, model: str(a.model, "model", false), retryBatch: str(a.retry_batch, "retry_batch", false), cancelBatch: str(a.cancel_batch, "cancel_batch", false),
+        jobId: str(a.job_id, "job_id", false), estimateOnly: a.estimate_only !== false, skipDone: a.skip_done !== false,
+      });
     }
     case "get_image_analysis": {
       const batch = str(a.batch_id, "batch_id", false);

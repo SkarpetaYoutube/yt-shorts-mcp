@@ -42,6 +42,18 @@ Wynik wizji każdej rolki trafia do wspólnego eksportu bez utraty szczegółów
 - **Markdown**: linia z modelem, próbą, `finish_reason`, tokenami i SHA-256 oryginalnej odpowiedzi (sam tekst odpowiedzi tylko w JSON).
 - `status.json`: `counts.vision_status` (ile rolek `ok` / `not_analyzed` / `in_progress` / `failed:*`).
 
+### Wersja 2.6: wizja całego zadania
+
+`analyze_images` z `job_id` analizuje wszystkie rolki zadania (zamiast listy ID):
+- **Domyślnie tylko szacunek** (`estimate_only=true`): ile rolek jest w zadaniu, ile ma już wynik, ile czeka w kolejce, ile wywołań trzeba (i najwyżej z ponowieniami),
+  ile zostało dziś limitu własnego i limitu modelu, ile dób to zajmie, przybliżony czas i zużycie tokenów (z faktycznych przebiegów tego modelu). Nic nie jest zlecane.
+- `estimate_only=false` zleca tylko rolki bez wyniku (`skip_done=true`, domyślnie); rolki już czekające w kolejce też są pomijane, więc ponowne uruchomienie nie wydaje limitu drugi raz.
+  `skip_done=false` analizuje ponownie (świadome wydanie limitu).
+- **Limit dobowy nie kończy się błędem**: gdy dobowy bezpiecznik wywołań Gemini (`GEMINI_DAILY_CALLS`) albo limit modelu jest wyczerpany, rolki czekają w kolejce do następnej doby
+  (powód i termin w `get_image_analysis` z `batch_id`, sekcja `queue_state`). Czekająca kolejka budzi serwer co 5 min.
+- `get_collection_status` ma pole `vision`: `ok`, `in_progress`, `failed`, `not_analyzed` oraz listę partii zlecanych dla zadania. Gotowe wyniki trafiają do eksportu automatycznie.
+- Nieudane rolki: `analyze_images` z `retry_batch` (jak dotąd).
+
 ### Rozpoznawanie zdjęć w rolkach (Gemini, próbnie)
 
 `analyze_images` wysyła publiczny link rolki do Gemini API (`generateContent`, `fileData.fileUri` + `videoMetadata.fps`,

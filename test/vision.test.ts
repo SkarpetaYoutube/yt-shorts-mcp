@@ -5,6 +5,7 @@ import { compareRuns, tsec } from "../src/vision";
 
 const KEY = "GEMKEY-MARKER-789";
 let w: World;
+const sql = async (q: string, ...args: unknown[]) => (runInDurableObject as any)(stub(), (inst: any) => inst.ctx.storage.sql.exec(q, ...args).toArray());
 const img = (id: number, t: string, desc: string, extra: Record<string, unknown> = {}) => ({
   id, first_visible: t, last_visible: t, appearances: [{ from: t, to: t }], sent_by: "right bubble", description_pl: desc, text_in_image: null,
   messages_before: [{ t: "0:01.0", sender: "Mom", text: "Where are you?" }], messages_after: [{ t: "0:05.0", sender: "Son", text: "At school" }],
@@ -23,6 +24,14 @@ async function finish() {
       return rows.some((r: any) => r.status === "running" || Number(r.next_at) <= Date.now());
     });
     if (!busy) return;
+    await new Promise((r) => setTimeout(r, 15));
+  }
+}
+
+/** Kilka alarmów bez czekania na koniec: dla kolejki zablokowanej limitem (rolki czekają do następnej doby). */
+async function settle(n = 12) {
+  for (let i = 0; i < n; i++) {
+    await runDurableObjectAlarm(stub());
     await new Promise((r) => setTimeout(r, 15));
   }
 }
@@ -101,12 +110,20 @@ describe("rozpoznawanie zdjęć (Gemini) – atrapa API", () => {
   it("bezpiecznik dzienny zapytań Gemini", async () => {
     await setEnv({ GEMINI_API_KEY: KEY, GEMINI_DAILY_CALLS: "1" });
     w.gemini = () => ok(result([], []));
-    await stub().startVision({ video: "VbJLBRLiu_U", fps: [1, 5], model: null });
-    await finish();
+    const r = await stub().startVision({ video: "VbJLBRLiu_U", fps: [1, 5], model: null });
+    await settle();
     const st = await stub().visionStatus("VbJLBRLiu_U");
     expect(w.geminiCalls).toHaveLength(1);
-    expect(st.runs.map((r: any) => r.status).sort()).toEqual(["error", "ok"]);
-    expect(st.runs.find((r: any) => r.status === "error").error).toMatch(/limit bezpieczeństwa/);
+    // wyczerpany bezpiecznik dobowy: druga rolka czeka w kolejce (nie kończy się błędem) i startuje po zwolnieniu limitu
+    expect(st.runs.map((x: any) => x.status).sort()).toEqual(["ok", "pending"]);
+    const b = await stub().visionBatch(r.batch_id);
+    expect(b.queue_state.blocks[0]).toMatchObject({ kind: "limit_dobowy", runs: 1 });
+    expect(b.queue_state.blocks[0].reason).toMatch(/dobowy bezpiecznik wywołań Gemini: 1 z 1/);
+    await sql("DELETE FROM budget WHERE name='gemini_calls'"); // jak po północy UTC
+    await setEnv({ GEMINI_DAILY_CALLS: "250" });
+    await finish();
+    expect(w.geminiCalls).toHaveLength(2);
+    expect((await stub().visionBatch(r.batch_id)).counts).toEqual({ ok: 2, pending: 0, failed: 0, cancelled: 0 });
   });
   it("walidacja i pomocnicze", async () => {
     await setEnv({ GEMINI_API_KEY: KEY });
@@ -234,10 +251,11 @@ describe("rozpoznawanie zdjęć (Gemini) – atrapa API", () => {
     await setEnv({ GEMINI_API_KEY: KEY, GEMINI_DAILY_CALLS: "3" });
     w.gemini = () => failing(503);
     const r = await stub().startVision({ video: V[0], fps: [1], model: null });
-    await finish();
+    await settle();
     expect(w.geminiCalls).toHaveLength(3);
     const b = await stub().visionBatch(r.batch_id);
-    expect(b.table[0].status).toMatch(/^błąd: .*limit bezpieczeństwa/);
+    expect(b.table[0].status).toMatch(/^czeka/); // czwarta próba czeka na zwolnienie limitu, nie startuje
+    expect(b.table[0].waiting_reason).toMatch(/dobowy bezpiecznik wywołań Gemini: 3 z 3/);
     expect(b.calls_today).toBe(3);
   });
   it("opóźnione ponowienie czeka (nie startuje przed next_at)", async () => {
