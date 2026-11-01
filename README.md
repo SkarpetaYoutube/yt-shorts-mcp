@@ -54,6 +54,12 @@ Wynik wizji każdej rolki trafia do wspólnego eksportu bez utraty szczegółów
 - `get_collection_status` ma pole `vision`: `ok`, `in_progress`, `failed`, `not_analyzed` oraz listę partii zlecanych dla zadania. Gotowe wyniki trafiają do eksportu automatycznie.
 - Nieudane rolki: `analyze_images` z `retry_batch` (jak dotąd).
 
+### Wersja 2.8.1: awatary w wynikach wizji
+
+Prompt wizji mocniej zabrania wpisywania awatarów z nagłówka czatu jako zdjęć. Gdy model mimo to wpisze awatar (sam opisuje go jako awatar/zdjęcie profilowe w nagłówku czatu albo opis zaczyna się od „Zdjęcie profilowe”), zdjęcie dostaje pole `likely_avatar: true`. Wpis **nie jest usuwany**: lokalny potok zrzutów pomija takie zdjęcia (z adnotacją w `zdjecia.md`), a dane w eksporcie zostają.
+
+Model `gemini-3.5-flash-lite` (limit 500/dobę zamiast 20 dla `gemini-3.6-flash`) dał na 8 rolkach tę samą liczbę zdjęć i podobne wiadomości (porównanie z OCR klatek, szczegóły w `CLAUDE.md`); wybierasz go parametrem `vision_model`/`model`.
+
 ### Wersja 2.8: wizja automatycznie po zebraniu
 
 `collect_shorts` z `auto_vision=true` (opcjonalnie `vision_model`) po zebraniu zadania **sam zleca wizję Gemini** dla rolek bez wyniku (raz; jak `analyze_images` z `job_id`, z pominięciem rolek z wynikiem i z respektowaniem limitów dobowych). Wymaga `GEMINI_API_KEY`; bez klucza albo przy złej nazwie modelu zadanie nie startuje. Postęp: `get_collection_status` (pole `vision`, w tym `vision.auto`); gdy automatyczna wizja nie ruszyła, `vision.auto.error` i `next_step` mówią dlaczego, a eksport działa bez niej. Cały przebieg to: `collect_shorts(auto_vision=true)` → czekanie na `complete` i `vision.in_progress=0` → `export_collection`.

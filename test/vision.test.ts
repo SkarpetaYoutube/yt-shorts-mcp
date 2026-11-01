@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { buildWorld, installFetch, stub, resetStore, setEnv, rej, type World } from "./helpers";
-import { compareRuns, tsec } from "../src/vision";
+import { compareRuns, tsec, flagAvatars, VISION_PROMPT } from "../src/vision";
 
 const KEY = "GEMKEY-MARKER-789";
 let w: World;
@@ -359,5 +359,24 @@ describe("rozpoznawanie zdjęć (Gemini) – atrapa API", () => {
     const t = b.table.find((x: any) => x.status.startsWith("czeka"));
     expect(t.waiting_reason).toMatch(/własny licznik dobowy modelu: 1 z 1/);
     expect(b.queue_state.explanation).toMatch(/blokad/);
+  });
+});
+
+describe("awatary w wynikach wizji", () => {
+  it("oznacza (nie usuwa) zdjęcia opisane przez model jako awatar z nagłówka czatu; zwykłych zdjęć nie rusza", () => {
+    const p = { images: [
+      img(1, "0:00.6", "Zdjęcie profilowe Thomasa przedstawiające mężczyznę.", { uncertainty_pl: "Avatar w nagłówku czatu, widoczny bardzo krótko." }),
+      img(2, "0:14.2", "Zdjęcie przedstawiające paczki banknotów w bagażniku."),
+      img(3, "0:20.0", "Zrzut ekranu profilu na portalu randkowym z opisem i zdjęciem."),
+      img(4, "0:30.0", "Awatar kontaktu obok dymka.", { uncertainty_pl: null }),
+      img(5, "0:00.0", "Zdjęcie profilowe lub wideo przedstawiające czarnoskórą osobę z szerokim uśmiechem."),
+    ] };
+    expect(flagAvatars(p)).toBe(3);
+    expect(p.images.map((i: any) => !!i.likely_avatar)).toEqual([true, false, false, true, true]);
+    expect(p.images).toHaveLength(5);
+    expect(flagAvatars({})).toBe(0);
+  });
+  it("prompt wyraźnie zabrania wpisywania awatarów jako zdjęć", () => {
+    expect(VISION_PROMPT).toMatch(/profile avatar is NEVER an image of the conversation/);
   });
 });

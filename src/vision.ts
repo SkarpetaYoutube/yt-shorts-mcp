@@ -12,7 +12,7 @@ The video is a YouTube Short in "fake text message" style: a chat conversation i
 
 TASK
 1. Transcribe every chat message that appears on screen, in order of appearance, verbatim in its original language (do not translate, do not fix spelling). For each message give: first time it becomes visible (M:SS.s, best estimate to 0.1 s), sender as shown (name shown on screen, or "left bubble"/"right bubble" if no name), and the exact text.
-2. Find EVERY photo/image that is part of the conversation (images sent as messages, images in bubbles, attachments, screenshots, memes, stickers that are pictures). Do NOT count: profile avatars in the header, emoji inside text, the app UI, the background gameplay/video behind the chat. If unsure whether something is a conversation image, include it and mark it uncertain.
+2. Find EVERY photo/image that is part of the conversation (images sent as messages, images in bubbles, attachments, screenshots, memes, stickers that are pictures). Do NOT count: profile avatars (the small round or square profile picture of a contact, shown in the chat header or next to a name or a bubble), emoji inside text, the app UI, the background gameplay/video behind the chat. A profile avatar is NEVER an image of the conversation, even if it shows a clear face or lasts only a moment: do not list it as an image and do not describe it. Only if you cannot tell an avatar from a sent photo, include it and mark it uncertain.
    For each image give:
    - first_visible (M:SS.s) and last_visible (M:SS.s), best estimate to 0.1 s;
    - sent_by (as in point 1);
@@ -179,12 +179,28 @@ export async function runGemini(rec: VisRecord, apiKey: string, doFetch: (u: str
   try {
     rec.parsed = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, ""));
     rec.status = Array.isArray(rec.parsed?.images) && Array.isArray(rec.parsed?.messages) ? "ok" : "invalid_output";
-    if (rec.status !== "ok") rec.error = "Odpowiedź nie ma wymaganych pól images/messages.";
+    if (rec.status !== "ok") rec.error = "Odpowiedź nie ma wymaganych pól images/messages."; else flagAvatars(rec.parsed);
   } catch (e) {
     rec.status = "invalid_output";
     rec.parse_error = String((e as Error).message).slice(0, 300);
     rec.error = "Odpowiedź modelu nie jest poprawnym JSON (zapisana w raw).";
   }
+}
+
+// Model czasem wpisuje awatar z nagłówka czatu jako zdjęcie, choć prompt tego zabrania, i sam to zaznacza w opisie lub niepewności (np. „Avatar w nagłówku czatu”).
+// Wzorzec jest wąski (awatar/zdjęcie profilowe + nagłówek/czat/kontakt w jednym zdaniu): zwykłe zdjęcie przedstawiające czyjś profil nie jest oznaczane.
+const AVATAR_RE = /(?:avatar|awatar|zdj[ęe]cie profilowe|profile (?:picture|photo|pic))[^.]{0,80}(?:nag[łl][óo]wk|header|czat|kontakt)|(?:nag[łl][óo]wk|header)[^.]{0,60}(?:avatar|awatar|zdj[ęe]cie profilowe|profile (?:picture|photo|pic))/i;
+
+const AVATAR_START_RE = /^\s*(?:zdj[ęe]cie profilowe|awatar|avatar)\b/i;
+
+/** Oznacza (nie usuwa) zdjęcia, które model sam opisał jako awatar z nagłówka czatu: im.likely_avatar = true. Zwraca liczbę oznaczonych. */
+export function flagAvatars(parsed: any): number {
+  let n = 0;
+  for (const im of Array.isArray(parsed?.images) ? parsed.images : []) {
+    // model lite opisuje awatar wprost („Zdjęcie profilowe lub wideo…”) bez wzmianki o nagłówku: opis zaczynający się od awatara/zdjęcia profilowego też oznaczamy
+    if (im && typeof im === "object" && (AVATAR_RE.test(String(im.uncertainty_pl ?? "")) || AVATAR_RE.test(String(im.description_pl ?? "")) || AVATAR_START_RE.test(String(im.description_pl ?? "")))) { im.likely_avatar = true; n++; }
+  }
+  return n;
 }
 
 /** "M:SS.s" → sekundy (null, gdy nie da się odczytać). */

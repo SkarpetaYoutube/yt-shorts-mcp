@@ -87,7 +87,9 @@ const msgs = (a) => (a?.length ? a.map((m) => `${m.t ?? "?"} ${m.sender ?? "?"}:
 export function opisZdjec(rec, man, exists, md5Of) {
   const wpisy = man.filter((m) => m.video_id === rec.video_id);
   const obrazy = rec.vision?.images ?? [];
-  const idy = [...new Set([...obrazy.map((i) => i.id), ...wpisy.map((m) => m.image_id)])].filter((x) => x != null).sort((a, b) => a - b);
+  // awatar z nagłówka czatu, który model wpisał jako zdjęcie (serwer oznacza likely_avatar): pomijany, o ile nie ma dla niego wpisu zrzutów (starsze przebiegi zostają bez zmian)
+  const awatar = (id) => !!obrazy.find((i) => i.id === id)?.likely_avatar && !wpisy.some((m) => m.image_id === id);
+  const idy = [...new Set([...obrazy.map((i) => i.id), ...wpisy.map((m) => m.image_id)])].filter((x) => x != null && !awatar(x)).sort((a, b) => a - b);
   return idy.map((id) => {
     const g = obrazy.find((i) => i.id === id) ?? null;
     const e = wpisy.find((m) => m.image_id === id) ?? null;
@@ -115,6 +117,8 @@ export function opisOcr(o) {
 function zdjeciaMd(rec, opis, zrzutyWykonane) {
   const L = [`# Zdjęcia w rolce: ${rec.title}`, "", `- ID: \`${rec.video_id}\` | link: ${rec.url}`, `- Status wizji (Gemini): ${rec.vision_status}`];
   if (!zrzutyWykonane) L.push("- Zrzuty klatek: nie wykonano dla tego eksportu.");
+  const pominiete = (rec.vision?.images ?? []).filter((i) => i.likely_avatar && !opis.some((z) => z.image_id === i.id));
+  if (pominiete.length) L.push(`- Pominięto ${pominiete.length} wpis(y) modelu, który sam opisał je jako awatar z nagłówka czatu, a nie zdjęcie z rozmowy: ${pominiete.map((i) => `#${i.id} (${i.first_visible ?? "?"})`).join(", ")}.`);
   L.push("");
   if (!opis.length) {
     L.push(rec.vision ? "Model nie wykrył żadnego zdjęcia w rozmowie (to ocena modelu, nie dowód braku zdjęć)." : `Brak danych o zdjęciach: wizja ma status „${rec.vision_status}”.`, "");

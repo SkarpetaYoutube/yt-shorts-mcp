@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { bezpiecznaNazwa, nazwaFolderuRolki, parseCsv, sekcjaMd, rozloz } from "./rozloz_na_rolki.mjs";
+import { bezpiecznaNazwa, nazwaFolderuRolki, parseCsv, sekcjaMd, rozloz, opisZdjec } from "./rozloz_na_rolki.mjs";
 import { tokeny, ocenaOcr } from "./ocr_sprawdz.mjs";
 import { INDEKS_KOLUMNY, liczbyZdjec, scalBaze, raportPartii } from "./indeks_i_baza.mjs";
 
@@ -191,6 +191,12 @@ t("indeks i raport: kolumny OCR i sekcja rozbieżności (pełny wg programu, a O
   assert.match(md, /„who stabs a chair”/);
   const bez = raportPartii({ kanal: "K", pozycje: [{ rec: { video_id: "V1", title: "T" }, opis: [opis[1]] }], teraz: "2026-11-01T00:00:00Z" });
   assert.ok(!/Rozbieżność/.test(bez));
+});
+t("awatar oznaczony przez serwer (likely_avatar) jest pominięty, chyba że ma już wpis zrzutów", () => {
+  const rec = { video_id: "V1", vision: { images: [{ id: 1, first_visible: "0:00.6", likely_avatar: true }, { id: 2, first_visible: "0:10.0" }, { id: 3, first_visible: "0:20.0", likely_avatar: true }] } };
+  const man = [{ video_id: "V1", image_id: 3, status: "KOMPLET", context_shots: [] }];
+  const ids = opisZdjec(rec, man, () => false, () => null).map((z) => z.image_id);
+  assert.deepEqual(ids, [2, 3]);
 });
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(process.exitCode ? "\nNIEPOWODZENIE" : `\nWSZYSTKO OK (${ok} testów)`);

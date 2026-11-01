@@ -209,7 +209,7 @@ async function processReel(rec, ch) {
     };
     // Faza A: wykrycie zdjęcia i pomiar czasu (na domyślnej jakości — szybko). Faza B: wybór najwyższej jakości (docelowo 1080p) i zapis PNG w natywnej rozdzielczości.
     const attemptOf = (im) => { const p0 = prev.find((x) => x.video_id === rec.video_id && x.image_id === im.id); return p0 ? (p0.attempts_total ?? p0.attempt_no ?? 1) + 1 : 1; };
-    const items = rec.vision.images.map((im) => ({ im, e: { video_id: rec.video_id, image_id: im.id, attempt_no: attemptOf(im), attempt_at: new Date().toISOString(), file_suffix: attemptOf(im) > 1 ? `_proba${attemptOf(im)}` : "", model_first: im.first_visible, model_last: im.last_visible, source, channel: ch, confirmed: false, measured_first_s: null, measured_last_s: null,
+    const items = rec.vision.images.filter((im) => !im.likely_avatar).map((im) => ({ im, e: { video_id: rec.video_id, image_id: im.id, attempt_no: attemptOf(im), attempt_at: new Date().toISOString(), file_suffix: attemptOf(im) > 1 ? `_proba${attemptOf(im)}` : "", model_first: im.first_visible, model_last: im.last_visible, source, channel: ch, confirmed: false, measured_first_s: null, measured_last_s: null,
       capture_t_s: null, conversation_file: null, photo_file: null, photo_box_px: null, source_resolution: null, photo_resolution: null, quality_note: null, note: null } }));
     for (const it of items) entries.push(it.e);
     if (!ready) { for (const it of items) it.e.note = note; return entries; }
