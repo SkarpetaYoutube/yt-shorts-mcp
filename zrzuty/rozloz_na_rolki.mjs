@@ -76,6 +76,8 @@ function usunFolder(p) {
 }
 
 // ------------------------------------------------------------------------------------------------ zdjęcia
+/** Nazwa pliku w folderze rolki: bez „_wycinek” i bez „_probaN” (oznaczenie rundy ponowienia zrzutów). */
+const czystaNazwa = (p) => path.basename(p).replace(/_wycinek/, "").replace(/_proba\d+/, "");
 const clock = (s) => { s = Math.max(0, Number(s) || 0); return `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, "0")}`; };
 const msgs = (a) => (a?.length ? a.map((m) => `${m.t ?? "?"} ${m.sender ?? "?"}: ${m.text}`).join(" | ") : "brak");
 
@@ -120,8 +122,8 @@ function zdjeciaMd(rec, opis, zrzutyWykonane) {
     if (z.zrzuty) {
       const r = z.zrzuty;
       L.push(`- Zmierzone na klatkach: ${r.zmierzony_przedzial_s[0] != null ? `${clock(r.zmierzony_przedzial_s[0])}–${clock(r.zmierzony_przedzial_s[1])}` : "brak"} | status zrzutu: ${r.status}`);
-      L.push(`- Samo zdjęcie: ${r.wycinek ? `\`zdjecia\\${path.basename(r.wycinek).replace(/_wycinek/, "")}\`` : "brak pliku"}`);
-      for (const k of r.klatki) L.push(`- Klatka (${k.rola}, ${clock(k.t_s)}): \`klatki\\${path.basename(k.plik)}\``);
+      L.push(`- Samo zdjęcie: ${r.wycinek ? `\`zdjecia\\${czystaNazwa(r.wycinek)}\`` : "brak pliku"}`);
+      for (const k of r.klatki) L.push(`- Klatka (${k.rola}, ${clock(k.t_s)}): \`klatki\\${czystaNazwa(k.plik)}\``);
       if (r.uwaga_programu) L.push(`- Uwaga programu: ${r.uwaga_programu}`);
       if (r.sprawdzenie_wzrokowe) L.push(`- Sprawdzenie wzrokowe: ${r.sprawdzenie_wzrokowe.result} (${r.sprawdzenie_wzrokowe.checked_by ?? "?"}, ${r.sprawdzenie_wzrokowe.checked_at ?? "?"})${r.sprawdzenie_wzrokowe.note ? ` — ${r.sprawdzenie_wzrokowe.note}` : ""}`);
     }
@@ -166,8 +168,8 @@ export function rozloz({ eksportDir, zrzutyDir = null, wyjscie, only = null }) {
     let wycinki = 0, klatki = 0;
     for (const z of opis) {
       if (!z.zrzuty) continue;
-      if (z.zrzuty.wycinek) { fs.mkdirSync(path.join(dir, "zdjecia"), { recursive: true }); fs.copyFileSync(path.join(zrzutyDir, z.zrzuty.wycinek), path.join(dir, "zdjecia", path.basename(z.zrzuty.wycinek).replace(/_wycinek/, ""))); wycinki++; }
-      for (const k of z.zrzuty.klatki) { fs.mkdirSync(path.join(dir, "klatki"), { recursive: true }); fs.copyFileSync(path.join(zrzutyDir, k.plik), path.join(dir, "klatki", path.basename(k.plik))); klatki++; }
+      if (z.zrzuty.wycinek) { fs.mkdirSync(path.join(dir, "zdjecia"), { recursive: true }); fs.copyFileSync(path.join(zrzutyDir, z.zrzuty.wycinek), path.join(dir, "zdjecia", czystaNazwa(z.zrzuty.wycinek))); wycinki++; }
+      for (const k of z.zrzuty.klatki) { fs.mkdirSync(path.join(dir, "klatki"), { recursive: true }); fs.copyFileSync(path.join(zrzutyDir, k.plik), path.join(dir, "klatki", czystaNazwa(k.plik))); klatki++; }
     }
     fs.writeFileSync(path.join(dir, "zdjecia.json"), JSON.stringify({ video_id: rec.video_id, vision_status: rec.vision_status, zrzuty_wykonane: man.some((m) => m.video_id === rec.video_id), zdjecia: opis }, null, 1));
     fs.writeFileSync(path.join(dir, "zdjecia.md"), zdjeciaMd(rec, opis, man.some((m) => m.video_id === rec.video_id)));
