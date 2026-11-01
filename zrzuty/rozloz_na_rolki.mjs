@@ -94,8 +94,11 @@ export function opisZdjec(rec, man, exists, md5Of) {
     const g = obrazy.find((i) => i.id === id) ?? null;
     const e = wpisy.find((m) => m.image_id === id) ?? null;
     const kategoria = e ? contextCategory(e, exists, md5Of) : null;
+    // zrzut przeszedł bez błędu odtwarzacza, a zdjęcia nie ma na klatkach: możliwy awatar lub błędny wpis modelu (ponawianie nie pomoże)
+    const podejrzany = !!e && kategoria === "BRAK" && ["NIE_ZNALEZIONO", "PRZYPISANE_DO_INNEGO"].includes(e.status);
     return {
       image_id: id,
+      podejrzany_wpis: podejrzany,
       gemini: g ? { first_visible: g.first_visible, last_visible: g.last_visible, description_pl: g.description_pl, text_in_image: g.text_in_image, sent_by: g.sent_by, messages_before: g.messages_before, messages_after: g.messages_after, uncertainty_pl: g.uncertainty_pl } : null,
       zrzuty: e
         ? { status: e.status, kategoria_kontekstu: kategoria, opis_kategorii: CTX_LABEL[kategoria], zmierzony_przedzial_s: [e.measured_first_s ?? null, e.measured_last_s ?? null], wycinek: e.photo_file && exists(e.photo_file) ? e.photo_file : null, klatki: shotFiles(e, exists).map((s) => ({ rola: s.role, plik: s.file, t_s: s.t_s, zdjecie_widoczne: !!s.photo_visible })), uwaga_programu: e.note ?? null, sprawdzenie_wzrokowe: e.content_check ?? null }
@@ -134,6 +137,7 @@ function zdjeciaMd(rec, opis, zrzutyWykonane) {
       if (z.gemini.uncertainty_pl) L.push(`- Niepewność wg Gemini: ${z.gemini.uncertainty_pl}`);
     } else L.push("- Gemini nie wykryło tego zdjęcia (wpis pochodzi ze zrzutów).");
     L.push(`- **Status: ${z.status_pl}**`);
+    if (z.podejrzany_wpis) L.push("- Uwaga: zrzut przebiegł bez błędu odtwarzacza, a zdjęcia nie ma na klatkach. To możliwy awatar z nagłówka czatu albo błędny wpis modelu (ponawianie nie pomoże); sprawdź wzrokowo.");
     if (z.ocr) L.push(`- Automatyczna kontrola tekstu (OCR): ${opisOcr(z.ocr)} (sprawdza tylko teksty wiadomości z wizji na zapisanych klatkach, nie treść zdjęcia; nie zastępuje przeglądu wzrokowego)`);
     if (z.zrzuty) {
       const r = z.zrzuty;

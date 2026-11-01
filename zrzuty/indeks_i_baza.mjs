@@ -7,23 +7,26 @@ export const INDEKS_KOLUMNY = [
   "lp", "kanal", "tytul", "id", "link", "opublikowano", "dlugosc_s", "wyswietlenia", "polubienia", "komentarze_liczba",
   "ranking_kanalu", "rolek_w_rankingu", "krotnosc_mediany", "top5_kanalu", "ponad_norme_kanalu", "przyrost_wyswietlen", "przyrost_na_dobe",
   "transkrypt_status", "czasy_transkryptu_status", "komentarze_status", "statystyki_status", "wizja_status",
-  "zdjec_wg_gemini", "zdjec_pelnych", "zdjec_czesciowych", "zdjec_brak", "ocr_zdjec_bez_brakow", "ocr_zdjec_z_brakami", "status_zdjec", "folder",
+  "zdjec_wg_gemini", "zdjec_pelnych", "zdjec_czesciowych", "zdjec_brak", "zdjec_brak_podejrzane_wpisy", "ocr_zdjec_bez_brakow", "ocr_zdjec_z_brakami", "status_zdjec", "folder",
 ];
 const tak = (v) => (v == null ? "" : v ? "TAK" : "NIE");
 const txt = (v) => (v == null ? "" : String(v));
 
-/** Liczby zdjęć wg kategorii kontekstu (pełne / częściowe / brak) i krótki opis statusu. */
+/**
+ * Liczby zdjęć wg kategorii kontekstu (pełne / częściowe / brak) i krótki opis statusu.
+ * `podejrzane` = część „brak”, gdzie zrzut przebiegł bez błędu odtwarzacza, a zdjęcia nie ma na klatkach (możliwy awatar lub błędny wpis modelu: ponawianie nie pomoże).
+ */
 export function liczbyZdjec(opis) {
-  let pelne = 0, czesciowe = 0, brak = 0, zweryf = 0, ocrOk = 0, ocrBraki = 0;
+  let pelne = 0, czesciowe = 0, brak = 0, podejrzane = 0, zweryf = 0, ocrOk = 0, ocrBraki = 0;
   for (const z of opis) {
     const k = z.zrzuty?.kategoria_kontekstu ?? "BRAK_ZRZUTU";
-    if (k.startsWith("PELNY")) pelne++; else if (k.startsWith("CZESCIOWY")) czesciowe++; else brak++;
+    if (k.startsWith("PELNY")) pelne++; else if (k.startsWith("CZESCIOWY")) czesciowe++; else { brak++; if (z.podejrzany_wpis) podejrzane++; }
     if (k.endsWith("_ZWERYFIKOWANY")) zweryf++;
     if (z.ocr?.status === "OCR_PELNY") ocrOk++; else if (z.ocr?.status === "OCR_CZESCIOWY") ocrBraki++;
   }
   const status = !opis.length ? "bez zdjęć wg wizji lub brak analizy wizji"
-    : `${pelne} pełne, ${czesciowe} częściowe, ${brak} brak (z ${opis.length}); sprawdzone wzrokowo: ${zweryf}`;
-  return { pelne, czesciowe, brak, zweryf, ocrOk, ocrBraki, status };
+    : `${pelne} pełne, ${czesciowe} częściowe, ${brak} brak${podejrzane ? ` (w tym ${podejrzane} możliwy fałszywy wpis modelu)` : ""} (z ${opis.length}); sprawdzone wzrokowo: ${zweryf}`;
+  return { pelne, czesciowe, brak, podejrzane, zweryf, ocrOk, ocrBraki, status };
 }
 
 /** Jeden wiersz indeksu: rekord eksportu + status zdjęć + względna ścieżka folderu rolki. */
@@ -33,7 +36,7 @@ export function wierszIndeksu(rec, opis, lp, folderWzgledny) {
     lp, rec.channel_title, rec.title, rec.video_id, rec.url, rec.published_at, rec.duration_seconds, rec.views, rec.likes, rec.comments_count,
     rec.channel_views_rank, rec.channel_shorts_ranked, rec.views_vs_channel_median, tak(rec.top_5_percent_channel), tak(rec.above_channel_norm), rec.views_gain, rec.views_gain_per_day,
     rec.transcript_status, rec.transcript_timed_status, rec.comments_status, rec.stats_status, rec.vision_status,
-    opis.length, z.pelne, z.czesciowe, z.brak, z.ocrOk, z.ocrBraki, z.status, folderWzgledny,
+    opis.length, z.pelne, z.czesciowe, z.brak, z.podejrzane, z.ocrOk, z.ocrBraki, z.status, folderWzgledny,
   ].map(txt);
 }
 
@@ -73,10 +76,11 @@ export function raportPartii({ kanal, pozycje, przebieg = null, teraz = new Date
   if (przebieg) L.push("## Zrzuty (ostatni przebieg)", "", `- czas: ${przebieg.czas_s} s; ponowienia odtwarzacza: ${przebieg.ponowienia ?? "?"}; zdjęć z potwierdzonym wycinkiem: ${przebieg.wycinek_potwierdzony ?? "?"}`, "");
   L.push("## Rolki", "", "| lp | tytuł | zdjęcia p/c/b | odtwarzacz (incydenty / przeładowania) |", "|---|---|---|---|");
   pozycje.forEach((p, i) => { const z = liczbyZdjec(p.opis), g = gracz(p.rec.video_id); L.push(`| ${i + 1} | ${String(p.rec.title).replace(/\|/g, "/")} | ${z.pelne}/${z.czesciowe}/${z.brak} | ${g ? `${g.incidents} / ${g.reloads}${g.exhausted ? " (budżet ponowień wyczerpany)" : ""}` : "brak danych (rolka nie była w ostatnim przebiegu zrzutów)"} |`); });
-  const ponow = [];
+  const ponow = [], podejrz = [];
   for (const p of pozycje) for (const z of p.opis) {
     const k = z.zrzuty?.kategoria_kontekstu ?? "BRAK_ZRZUTU";
     if (k.startsWith("PELNY")) continue;
+    if (z.podejrzany_wpis && k === "BRAK") { podejrz.push(`- \`${p.rec.video_id}\` zdjęcie ${z.image_id} (${p.rec.title}), czas wg Gemini ${z.gemini?.first_visible ?? "?"}–${z.gemini?.last_visible ?? "?"}: ${z.gemini?.description_pl ?? "brak opisu"}`); continue; }
     const why = z.zrzuty?.uwaga_programu ? z.zrzuty.uwaga_programu.slice(0, 220) : z.status_pl;
     const brakuje = z.zrzuty?.sprawdzenie_wzrokowe?.missing?.length ? ` Brakuje: ${z.zrzuty.sprawdzenie_wzrokowe.missing.map((x) => `„${x}”`).join(", ")}.` : "";
     const oc = z.ocr?.status === "OCR_CZESCIOWY" ? ` OCR: nie widać ${z.ocr.brakuje.map((x) => `„${x}”`).join(", ")}.` : "";
@@ -85,10 +89,11 @@ export function raportPartii({ kanal, pozycje, przebieg = null, teraz = new Date
   // zdjęcia ocenione jako pełne, na których OCR nie widzi części wiadomości z wizji: do sprawdzenia wzrokowego (tak wyszło przy audycie: pomyłka człowieka lub programu)
   const rozb = [];
   for (const p of pozycje) for (const z of p.opis) if ((z.zrzuty?.kategoria_kontekstu ?? "").startsWith("PELNY") && z.ocr?.status === "OCR_CZESCIOWY") rozb.push(`- \`${p.rec.video_id}\` zdjęcie ${z.image_id}: oceniane jako pełne, ale OCR nie widzi na klatkach: ${z.ocr.brakuje.map((x) => `„${x}”`).join(", ")}. Sprawdź wzrokowo.`);
-  L.push("", "## Do ponowienia lub sprawdzenia", "", ...(ponow.length ? ponow : ["Nic: wszystkie zdjęcia mają pełny kontekst."]));
+  L.push("", "## Do ponowienia lub sprawdzenia", "", ...(ponow.length ? ponow : [podejrz.length ? "Nic do ponowienia (patrz niżej: wpisy modelu bez zdjęcia na klatkach)." : "Nic: wszystkie zdjęcia mają pełny kontekst."]));
   if (rozb.length) L.push("", "## Rozbieżność: ocena „pełny”, a OCR widzi braki", "", ...rozb);
+  if (podejrz.length) L.push("", "## Wpis modelu bez zdjęcia na klatkach (nie ponawiać)", "", "Zrzut przebiegł bez błędu odtwarzacza, a w oknie czasu nie ma zdjęcia: to najczęściej awatar z nagłówka czatu albo błędny wpis modelu (rzadziej: czas Gemini daleko od prawdziwego). Ponawianie tego nie naprawi; sprawdź wzrokowo klatki rolki i, jeśli to nie zdjęcie, zignoruj wpis.", "", ...podejrz);
   if (ponow.length) {
-    const ids = [...new Set(pozycje.filter((p) => p.opis.some((z) => !(z.zrzuty?.kategoria_kontekstu ?? "").startsWith("PELNY"))).map((p) => p.rec.video_id))];
+    const ids = [...new Set(pozycje.filter((p) => p.opis.some((z) => { const k = z.zrzuty?.kategoria_kontekstu ?? "BRAK_ZRZUTU"; return !k.startsWith("PELNY") && !(z.podejrzany_wpis && k === "BRAK"); })).map((p) => p.rec.video_id))];
     L.push("", "Ponowienie tylko tych rolek (z folderu zrzuty): `.\\zbierz_rolki.ps1 -Manifest \"<nowy link manifest>\" -Tylko " + ids.join(",") + "`");
   }
   return L.join("\n") + "\n";

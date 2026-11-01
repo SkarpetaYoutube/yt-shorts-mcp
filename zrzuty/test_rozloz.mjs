@@ -6,6 +6,8 @@ import assert from "node:assert/strict";
 import { bezpiecznaNazwa, nazwaFolderuRolki, parseCsv, sekcjaMd, rozloz, opisZdjec } from "./rozloz_na_rolki.mjs";
 import { tokeny, ocenaOcr } from "./ocr_sprawdz.mjs";
 import { INDEKS_KOLUMNY, liczbyZdjec, scalBaze, raportPartii } from "./indeks_i_baza.mjs";
+import { zlozPionowo, przygotujAudyt } from "./audyt_arkusze.mjs";
+import { decodePng, encodePng } from "./png_proste.mjs";
 
 let ok = 0;
 const t = (nazwa, fn) => { try { fn(); ok++; console.log("OK   ", nazwa); } catch (e) { console.log("BŁĄD", nazwa, "\n     ", e.message); process.exitCode = 1; } };
@@ -115,7 +117,7 @@ t("indeks kanału: jeden wiersz na rolkę, statusy zdjęć, ścieżka folderu, z
   assert.equal(c(r1, "folder"), "Kanał Test - Rolka ze zdjęciami test [AAAAAAAAAA1]");
   assert.equal(c(csv.find((r) => c(r, "id") === "AAAAAAAAAA2"), "zdjec_wg_gemini"), "0");
   assert.match(fs.readFileSync(path.join(kanal, "_zbiorczo", "indeks_rolek.md"), "utf8"), /\| 1 \| Rolka ze zdjęciami[^|]*\| 100 \|/);
-  assert.deepEqual(liczbyZdjec([]), { pelne: 0, czesciowe: 0, brak: 0, zweryf: 0, ocrOk: 0, ocrBraki: 0, status: "bez zdjęć wg wizji lub brak analizy wizji" });
+  assert.deepEqual(liczbyZdjec([]), { pelne: 0, czesciowe: 0, brak: 0, podejrzane: 0, zweryf: 0, ocrOk: 0, ocrBraki: 0, status: "bez zdjęć wg wizji lub brak analizy wizji" });
 });
 t("baza lokalna: scala eksporty bez duplikatów, zostaje najnowszy rekord, historia wyświetleń rośnie", () => {
   const baza = path.join(kanal, "_baza");
@@ -197,6 +199,46 @@ t("awatar oznaczony przez serwer (likely_avatar) jest pominięty, chyba że ma j
   const man = [{ video_id: "V1", image_id: 3, status: "KOMPLET", context_shots: [] }];
   const ids = opisZdjec(rec, man, () => false, () => null).map((z) => z.image_id);
   assert.deepEqual(ids, [2, 3]);
+});
+t("brak zdjęcia na klatkach bez błędu odtwarzacza = możliwy fałszywy wpis (osobna sekcja, bez ponawiania); błąd odtwarzacza = do ponowienia", () => {
+  const rec = { video_id: "V1", title: "T", vision: { images: [{ id: 1, first_visible: "0:00.0", last_visible: "0:13.0", description_pl: "twarz" }, { id: 2, first_visible: "0:20.0", last_visible: "0:25.0", description_pl: "pokój" }] } };
+  const man = [
+    { video_id: "V1", image_id: 1, status: "NIE_ZNALEZIONO", note: "zdjęcia NIE znaleziono", context_shots: [] },
+    { video_id: "V1", image_id: 2, status: "BLAD_FAZY_A", note: "odtwarzacz", context_shots: [] },
+  ];
+  const opis = opisZdjec(rec, man, () => false, () => null);
+  assert.equal(opis[0].podejrzany_wpis, true); assert.equal(opis[1].podejrzany_wpis, false);
+  const l = liczbyZdjec(opis);
+  assert.equal(l.brak, 2); assert.equal(l.podejrzane, 1); assert.match(l.status, /2 brak \(w tym 1 możliwy fałszywy wpis modelu\)/);
+  const md = raportPartii({ kanal: "K", pozycje: [{ rec, opis }], teraz: "2026-11-01T00:00:00Z" });
+  assert.match(md, /## Wpis modelu bez zdjęcia na klatkach \(nie ponawiać\)/);
+  assert.match(md, /zdjęcie 1 \(T\), czas wg Gemini 0:00\.0–0:13\.0: twarz/);
+  assert.match(md, /zdjęcie 2 \(T\)[^\n]*brak zdjęcia na klatkach/); // błąd odtwarzacza zostaje na liście do ponowienia
+  const tylko = raportPartii({ kanal: "K", pozycje: [{ rec, opis: [opis[0]] }], teraz: "2026-11-01T00:00:00Z" });
+  assert.match(tylko, /Nic do ponowienia/); assert.ok(!/-Tylko/.test(tylko));
+});
+t("arkusze audytu: klatki jedna pod drugą, szablon z md5, pominięcie już sprawdzonych", () => {
+  const px = (w, h, v) => ({ w, h, data: Buffer.alloc(w * h * 4, v) });
+  const z = zlozPionowo([px(4, 2, 10), px(6, 3, 20)], 1);
+  assert.equal(z.w, 6); assert.equal(z.h, 6); assert.equal(z.data[0], 10); assert.equal(z.data[(3 * 6 + 5) * 4], 20);
+  const kd = path.join(tmp, "arkusze_kanal"), rob = path.join(kd, "_zrzuty_robocze"), zb = path.join(kd, "_zbiorczo");
+  fs.mkdirSync(path.join(rob, "frames"), { recursive: true }); fs.mkdirSync(zb, { recursive: true });
+  for (const n of ["a", "b"]) fs.writeFileSync(path.join(rob, "frames", n + ".png"), encodePng(px(8, 4, 100)));
+  const e = (id, files) => ({ video_id: "V1", image_id: id, status: "KOMPLET", context_complete: true, before_complete: true, context_shots: files.map((f, i) => ({ role: i ? "reakcja" : "przed", file: "frames/" + f + ".png", t_s: i + 1, photo_visible: true })) });
+  fs.writeFileSync(path.join(rob, "frames_manifest.json"), JSON.stringify([e(1, ["b", "a"]), e(2, ["a"])]));
+  fs.writeFileSync(path.join(zb, "x_json.json"), JSON.stringify([{ video_id: "V1", title: "Rolka", vision: { images: [{ id: 1, description_pl: "opis", messages_before: [{ t: "0:01", sender: "A", text: "hej" }], messages_after: [] }] } }]));
+  const r = przygotujAudyt(kd, { teraz: "2026-11-01T00:00:00Z" });
+  assert.equal(r.arkusze.length, 2); assert.ok(fs.existsSync(path.join(r.folder, "arkusz_V1_1.png")));
+  const dec = decodePng(fs.readFileSync(path.join(r.folder, "arkusz_V1_1.png"))); assert.equal(dec.w, 8); assert.equal(dec.h, 4 + 4 + 10);
+  const szablon = JSON.parse(fs.readFileSync(path.join(r.folder, "audyt_szablon.json"), "utf8"));
+  assert.equal(szablon[0].files.length, 2); assert.match(szablon[0].files[0].md5, /^[0-9a-f]{32}$/); assert.equal(szablon[0].result, "");
+  assert.match(fs.readFileSync(path.join(r.folder, "ARKUSZE.md"), "utf8"), /wiadomości przed: 0:01 A: hej/);
+  // wpis z ważną oceną wzrokową jest pomijany
+  const man = JSON.parse(fs.readFileSync(path.join(rob, "frames_manifest.json"), "utf8"));
+  man[1].content_check = { result: "PELNY", missing: [], files: [{ file: "frames/a.png", md5: null }] };
+  fs.writeFileSync(path.join(rob, "frames_manifest.json"), JSON.stringify(man));
+  const r2 = przygotujAudyt(kd);
+  assert.equal(r2.arkusze.length, 1); assert.equal(r2.pominiete[0].powod, "już sprawdzone wzrokowo");
 });
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(process.exitCode ? "\nNIEPOWODZENIE" : `\nWSZYSTKO OK (${ok} testów)`);

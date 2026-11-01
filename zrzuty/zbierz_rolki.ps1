@@ -73,6 +73,8 @@ $zr = if (Test-Path (Join-Path $robocze "frames_manifest.json")) { $robocze } el
 $only = if ($Tylko) { @("--only", $Tylko) } else { @() }
 node rozloz_na_rolki.mjs $tmp $zr $wyn @only --ocr 2>&1 | ForEach-Object { Log $_.ToString() }
 $c2 = $LASTEXITCODE
+# arkusze do przegladu wzrokowego (lokalnie, bez YouTube): jeden obraz na zdjecie + szablon audytu z md5
+if ($c2 -ne 1 -and (Test-Path (Join-Path $robocze "frames_manifest.json"))) { node audyt_arkusze.mjs $kanalDir 2>&1 | ForEach-Object { Log $_.ToString() } }
 if ($c2 -ne 1 -and (Test-Path $kanalDir)) { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue } # pliki eksportu sa juz w _zbiorczo
 if (Test-Path (Join-Path $kanalDir "_zbiorczoRAPORT_PARTII.md")) { Log ("RAPORT: " + (Join-Path $kanalDir "_zbiorczoRAPORT_PARTII.md")) }
 Log ("KONIEC " + (Get-Date).ToString("o") + "; calosc: " + [math]::Round(((Get-Date) - $T0).TotalSeconds, 1) + " s | folder kanalu: $kanalDir")

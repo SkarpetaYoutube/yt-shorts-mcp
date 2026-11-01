@@ -11,3 +11,5 @@ zrzuty/zrzuty/
 zrzuty/diagnostyka.log
 _archiwum/
 deploy_log.txt
+# lokalne skrypty z podpisanymi linkami eksportow (wygasle, ale nigdy do repo)
+pobierz_wszystko.ps1
