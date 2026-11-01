@@ -81,6 +81,13 @@ describe("uzupełnianie znaczników czasu (fill_timestamps)", () => {
     expect(await dispatch({} as any, "https://x", fake, "continue_collection", { job_id: "c-1", wait_seconds: 0 })).toEqual({ complete: true, running: false });
     expect(calls).toEqual(["resume"]);
     expect(await dispatch({} as any, "https://x", fake, "continue_collection", { job_id: "c-1", wait_seconds: 0, fill_timestamps: true })).toEqual({ complete: true, running: false, timestamps_backfill: { filled: 3 } });
+    // starszy schemat narzędzia po stronie klienta może przesłać wartość logiczną jako tekst
+    calls.length = 0;
+    expect(await dispatch({} as any, "https://x", fake, "continue_collection", { job_id: "c-1", wait_seconds: 0, fill_timestamps: "true" })).toMatchObject({ timestamps_backfill: { filled: 3 } });
+    expect(calls).toEqual(["backfill:c-1", "resume"]);
+    calls.length = 0;
+    await dispatch({} as any, "https://x", fake, "continue_collection", { job_id: "c-1", wait_seconds: 0, fill_timestamps: "false" });
+    expect(calls).toEqual(["resume"]);
     await expect(dispatch({} as any, "https://x", fake, "continue_collection", { job_id: "c-1", fill_timestamps: "tak" })).rejects.toThrow(/true albo false/);
   });
 });

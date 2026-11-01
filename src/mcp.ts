@@ -207,6 +207,15 @@ const oneOf = <T extends string>(v: unknown, field: string, allowed: readonly T[
   return v as T;
 };
 
+/** Wartość logiczna z argumentu narzędzia. Klient ze starszym schematem narzędzia może przesłać "true"/"false" jako tekst, więc to też przyjmujemy; inne wartości są błędem. */
+const bool = (v: unknown, field: string): boolean | undefined => {
+  if (v == null) return undefined;
+  if (typeof v === "boolean") return v;
+  if (v === "true") return true;
+  if (v === "false") return false;
+  throw new UserError(`${field}: true albo false.`);
+};
+
 async function waitFor<T>(seconds: number, get: () => Promise<T>, done: (v: T) => boolean): Promise<T> {
   const end = Date.now() + Math.max(0, Math.min(seconds, 25)) * 1000;
   let cur = await get();
@@ -235,8 +244,7 @@ export async function dispatch(env: Env, origin: string, st: any, name: string, 
     case "continue_collection": {
       const id = str(a.job_id, "job_id")!;
       const tm = a.transcript_mode == null ? null : oneOf(a.transcript_mode, "transcript_mode", ["native", "auto"] as const, "native");
-      if (a.fill_timestamps != null && typeof a.fill_timestamps !== "boolean") throw new UserError("fill_timestamps: true albo false.");
-      const backfill = a.fill_timestamps === true ? await st.backfillTimestamps(id) : null;
+      const backfill = bool(a.fill_timestamps, "fill_timestamps") === true ? await st.backfillTimestamps(id) : null;
       await st.resume(id, { retryFailed: a.retry_failed === true, transcriptMode: tm });
       const status = await waitFor(int(a.wait_seconds, "wait_seconds", 20), () => st.status(id), (s: any) => s.complete || !s.running);
       return backfill ? { ...status, timestamps_backfill: backfill } : status;
@@ -276,10 +284,10 @@ export async function dispatch(env: Env, origin: string, st: any, name: string, 
       const fps = fpsRaw == null ? [1] : fpsRaw.map((x: unknown) => { const n = typeof x === "string" ? Number(x) : x; if (typeof n !== "number" || !isFinite(n)) throw new UserError("fps: liczby."); return n; });
       const videosRaw = asList(a.videos);
       const videos = videosRaw?.map((x: unknown) => str(x, "videos")!);
-      for (const k of ["estimate_only", "skip_done"]) if (a[k] != null && typeof a[k] !== "boolean") throw new UserError(k + ": true albo false.");
+      const estimateOnly = bool(a.estimate_only, "estimate_only") !== false, skipDone = bool(a.skip_done, "skip_done") !== false;
       return await st.startVision({
         video: str(a.video, "video", false) ?? undefined, videos, fps, model: str(a.model, "model", false), retryBatch: str(a.retry_batch, "retry_batch", false), cancelBatch: str(a.cancel_batch, "cancel_batch", false),
-        jobId: str(a.job_id, "job_id", false), estimateOnly: a.estimate_only !== false, skipDone: a.skip_done !== false,
+        jobId: str(a.job_id, "job_id", false), estimateOnly, skipDone,
       });
     }
     case "get_image_analysis": {

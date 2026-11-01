@@ -161,6 +161,8 @@ describe("wizja całego zadania (analyze_images z job_id)", () => {
     expect(got).toMatchObject({ jobId: "c-1", estimateOnly: true, skipDone: true, fps: [1] });
     await dispatch({} as any, "https://x", fake, "analyze_images", { job_id: "c-1", estimate_only: false, skip_done: false });
     expect(got).toMatchObject({ estimateOnly: false, skipDone: false });
+    await dispatch({} as any, "https://x", fake, "analyze_images", { job_id: "c-1", estimate_only: "false", skip_done: "true" }); // tekstowe wartości logiczne starszych klientów
+    expect(got).toMatchObject({ estimateOnly: false, skipDone: true });
     await expect(dispatch({} as any, "https://x", fake, "analyze_images", { job_id: "c-1", estimate_only: "nie" })).rejects.toThrow(/true albo false/);
   });
 });
