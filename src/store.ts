@@ -83,7 +83,7 @@ export interface Job {
   /** wskaźnik na zestaw eksportu tego zadania (eksport pojedynczego zadania to zestaw z jednym zadaniem) */
   export: { setId: string } | null;
   /** brak w zadaniach sprzed rozbudowy: wtedy bez komentarzy i bez statystyk kanału */
-  opts?: { comments: boolean; channelStats: boolean; estimateFirst?: boolean };
+  opts?: { comments: boolean; channelStats: boolean; estimateFirst?: boolean; autoVision?: { model: string | null } };
   baseline?: Baseline | null;
   /** zadanie czeka na potwierdzenie po szacunku kosztów (continue_collection rusza dalej) */
   awaiting?: "confirm" | null;
@@ -91,7 +91,7 @@ export interface Job {
   /** odświeżanie samych statystyk/komentarzy (bez transkrypcji) */
   refresh?: { startedAt: number; comments: boolean; via: "channel" | "items"; finishedAt?: number } | null;
   /** partie wizji (analyze_images z job_id) zlecone dla rolek tego zadania; sam wynik wizji leży w tabeli vis, po ID rolki */
-  vision?: { batches: { batch_id: string; model: string; fps: number[]; started_at: string; runs: number }[] };
+  vision?: { batches: { batch_id: string; model: string; fps: number[]; started_at: string; runs: number }[]; /** automatyczne zlecenie wizji po zebraniu (collect_shorts z auto_vision) */ auto?: { started_at: string; error?: string } };
 }
 
 const num = (v: string | undefined, d: number) => {
@@ -277,11 +277,15 @@ export class Store extends DurableObject<Env> {
 
   async startJob(p: {
     channel: string; mode: Mode; count: number; transcriptMode: TMode; lang: string | null;
-    comments?: boolean; channelStats?: boolean; estimateFirst?: boolean;
+    comments?: boolean; channelStats?: boolean; estimateFirst?: boolean; autoVision?: boolean; visionModel?: string | null;
   }): Promise<any> {
     const max = num(this.env.COLLECT_MAX_COUNT, 500);
     if (!Number.isInteger(p.count) || p.count < 1 || p.count > max) throw new UserError(`count musi być liczbą całkowitą 1-${max}.`);
     if (!["newest", "oldest", "most_viewed"].includes(p.mode)) throw new UserError("mode: newest, oldest albo most_viewed.");
+    if (p.autoVision) {
+      if (!this.env.GEMINI_API_KEY) throw new UserError("auto_vision: rozpoznawanie zdjęć jest wyłączone (brak sekretu GEMINI_API_KEY w Cloudflare).");
+      this.visParams([1], p.visionModel ?? null); // sprawdza nazwę modelu od razu, nie dopiero po zebraniu
+    }
     this.prune();
     const s = this.svc();
     let ch: ChannelInfo;
@@ -308,7 +312,7 @@ export class Store extends DurableObject<Env> {
       shortfall: null,
       stoppedReason: null,
       export: null,
-      opts: { comments: p.comments !== false, channelStats: p.channelStats !== false, estimateFirst: p.estimateFirst === true },
+      opts: { comments: p.comments !== false, channelStats: p.channelStats !== false, estimateFirst: p.estimateFirst === true, ...(p.autoVision ? { autoVision: { model: p.visionModel ?? null } } : {}) },
       baseline: null,
       awaiting: null,
       refresh: null,
@@ -478,10 +482,12 @@ export class Store extends DurableObject<Env> {
     let vision: any = null; // list_collections nie liczy wizji (oszczędność CPU przy wielu zadaniach)
     if (withVision) {
       const vOk = vcount(hasOk), vLive = vcount(`NOT ${hasOk} AND ${hasLive}`), vFail = vcount(`NOT ${hasOk} AND NOT ${hasLive} AND ${hasAny}`);
-      vision = { ok: vOk, in_progress: vLive, failed: vFail, not_analyzed: total - vOk - vLive - vFail, batches: job.vision?.batches ?? [] };
+      vision = { ok: vOk, in_progress: vLive, failed: vFail, not_analyzed: total - vOk - vLive - vFail, batches: job.vision?.batches ?? [], auto: job.vision?.auto ?? null };
     }
     let next: string;
     if (job.awaiting === "confirm") next = "Szacunek kosztów gotowy (pole estimate). Jeśli się zgadzasz, wywołaj continue_collection, aby pobrać transkrypcje.";
+    else if (done && vision && vision.in_progress > 0) next = "Zebrane. Wizja Gemini w toku (pole vision); po jej zakończeniu wywołaj export_collection (CSV/JSON/Markdown).";
+    else if (done && vision?.auto?.error) next = `Zebrane, ale automatyczna wizja nie ruszyła: ${vision.auto.error} Eksport (export_collection) działa bez niej; wizję można zlecić przez analyze_images z job_id.`;
     else if (done) next = "Gotowe. Wywołaj export_collection (CSV/JSON/Markdown) albo read_collection (czytanie w rozmowie).";
     else if (job.running) next = "Zadanie pracuje w tle na serwerze. Wywołaj continue_collection z wait_seconds albo get_collection_status za chwilę.";
     else next = `Zatrzymano: ${job.stoppedReason ?? "wstrzymane"} Po usunięciu przyczyny wywołaj continue_collection (ponowi tylko brakujące elementy).`;
@@ -563,6 +569,7 @@ export class Store extends DurableObject<Env> {
       this.bump(job);
       this.saveJob(job);
       if (job.running) again = true;
+      if (job.phase === "done" && !job.running && job.opts?.autoVision && !job.vision?.auto) await this.autoVision(job.id);
       break;
     }
     if (!again) {
@@ -1228,6 +1235,19 @@ export class Store extends DurableObject<Env> {
     };
   }
 
+  /** Automatyczne zlecenie wizji dla zadania z auto_vision (raz, po zebraniu): jak analyze_images z job_id i estimate_only=false, z pominięciem rolek z wynikiem. */
+  private async autoVision(jobId: string): Promise<void> {
+    const model = this.loadJob(jobId).opts?.autoVision?.model ?? null;
+    const mark = (info: { started_at: string; error?: string }) => { const j = this.loadJob(jobId); j.vision = { batches: j.vision?.batches ?? [], auto: info }; this.saveJob(j); };
+    const started_at = new Date().toISOString();
+    mark({ started_at }); // znacznik przed zleceniem: kolejne alarmy nie zlecą drugi raz
+    try {
+      await this.visionForJob(jobId, [1], model, false, true, this.visCfg());
+    } catch (e) {
+      mark({ started_at, error: e instanceof UserError ? e.message : `Wewnętrzny błąd (${(e as Error)?.name})` });
+    }
+  }
+
   /** Walidacja fps i modelu wspólna dla analizy pojedynczych rolek i całego zadania. */
   private visParams(fps: number[], modelIn: string | null): { fpsList: number[]; model: string } {
     const fpsList = [...new Set(fps)];
@@ -1301,7 +1321,7 @@ export class Store extends DurableObject<Env> {
     const batch = "b-" + crypto.randomUUID().replace(/-/g, "").slice(0, 16);
     for (const pr of pairs) this.saveVis(this.newVisRecord(pr.vid, pr.fps, model, batch, 1, cfg.maxAttempts, null, 0));
     const fresh = this.loadJob(jobId);
-    fresh.vision = { batches: [...(fresh.vision?.batches ?? []), { batch_id: batch, model, fps: fpsList, started_at: new Date().toISOString(), runs: calls }] };
+    fresh.vision = { ...fresh.vision, batches: [...(fresh.vision?.batches ?? []), { batch_id: batch, model, fps: fpsList, started_at: new Date().toISOString(), runs: calls }] };
     this.saveJob(fresh);
     await this.scheduleAlarm(0);
     return { ...est, estimate_only: false, batch_id: batch, queued_runs: calls, next_step: "Postęp: get_collection_status (pole vision) albo get_image_analysis z batch_id. Gotowe wyniki trafiają do eksportu automatycznie." };

@@ -148,6 +148,47 @@ describe("wizja całego zadania (analyze_images z job_id)", () => {
     expect(w.geminiCalls).toHaveLength(400);
   }, 120000);
 
+  it("auto_vision: po zebraniu wizja zlecana sama (raz), gotowe wyniki od razu w eksporcie; rolki z wynikiem pomijane", async () => {
+    const { job_id } = await stub().startJob({ channel: "@przyklad", mode: "newest", count: 5, transcriptMode: "native", lang: null, autoVision: true, visionModel: MODEL });
+    const st = await drive(job_id);
+    expect(st.complete).toBe(true);
+    expect(st.vision.auto.started_at).toBeTruthy();
+    expect(st.vision.batches).toHaveLength(1);
+    expect(st.vision.batches[0]).toMatchObject({ model: MODEL, runs: 5 });
+    await finish();
+    expect(w.geminiCalls).toHaveLength(5);
+    const done = await stub().status(job_id);
+    expect(done.vision).toMatchObject({ ok: 5, in_progress: 0, failed: 0, not_analyzed: 0 });
+    expect(done.next_step).toMatch(/Gotowe/);
+    for (let i = 0; i < 3; i++) await runDurableObjectAlarm(stub()); // kolejne alarmy nie zlecają drugi raz
+    expect(w.geminiCalls).toHaveLength(5);
+    expect((await stub().status(job_id)).vision.batches).toHaveLength(1);
+    await runExport(job_id);
+    const rows = JSON.parse((await stub().exportChunks(job_id, "json")).join(""));
+    expect(rows.every((r: any) => r.vision_status === "ok")).toBe(true);
+    // drugie zadanie z tych samych rolek: wyniki już są, więc nic nie jest zlecane (0 wywołań), a status nie udaje, że coś ruszyło
+    const j2 = await stub().startJob({ channel: "@przyklad", mode: "newest", count: 5, transcriptMode: "native", lang: null, autoVision: true, visionModel: MODEL });
+    const st2 = await drive(j2.job_id);
+    expect(st2.complete).toBe(true);
+    expect(st2.vision.batches).toHaveLength(0);
+    expect(st2.vision.auto.error).toBeUndefined();
+    expect(st2.vision).toMatchObject({ ok: 5, not_analyzed: 0 });
+    expect(w.geminiCalls).toHaveLength(5);
+  });
+
+  it("auto_vision: bez klucza Gemini i ze złą nazwą modelu zadanie nie startuje (jasny błąd); parametry w narzędziu MCP", async () => {
+    await expect(rej(stub().startJob({ channel: "@przyklad", mode: "newest", count: 5, transcriptMode: "native", lang: null, autoVision: true, visionModel: "zły model!" }))).rejects.toThrow(/model/i);
+    await setEnv({ GEMINI_API_KEY: undefined });
+    await expect(rej(stub().startJob({ channel: "@przyklad", mode: "newest", count: 5, transcriptMode: "native", lang: null, autoVision: true }))).rejects.toThrow(/GEMINI_API_KEY/);
+    expect((await stub().list(10)).collections).toHaveLength(0); // nic nie zapisano
+    let got: any = null;
+    const fake = { startJob: async (p: any) => { got = p; return { ok: true }; } };
+    await dispatch({} as any, "https://x", fake, "collect_shorts", { channel: "@a", count: 3, auto_vision: "true", vision_model: MODEL });
+    expect(got).toMatchObject({ autoVision: true, visionModel: MODEL });
+    await dispatch({} as any, "https://x", fake, "collect_shorts", { channel: "@a", count: 3 });
+    expect(got).toMatchObject({ autoVision: false, visionModel: null });
+  });
+
   it("nieudane rolki są widoczne w statusie jako failed i da się je ponowić (retry_batch)", async () => {
     await setEnv({ GEMINI_MAX_ATTEMPTS: "1" });
     const job = await makeJob(5);

@@ -34,6 +34,8 @@ export const TOOLS = [
           description: "Przejrzyj całą historię Shortsów kanału, by policzyć normę kanału (mediana, 95. percentyl, pozycja). Przy newest kosztuje kilka jednostek YouTube więcej.",
         },
         estimate_first: { type: "boolean", default: true, description: "Zatrzymaj się po wyborze filmów i pokaż przewidywane zużycie kredytów (z uwzględnieniem zapisanych transkrypcji)." },
+        auto_vision: { type: "boolean", default: false, description: "Po zebraniu zleć automatycznie wizję Gemini (zdjęcia i wiadomości) dla rolek bez wyniku, z respektowaniem limitów (jak analyze_images z job_id). Wymaga GEMINI_API_KEY." },
+        vision_model: { type: "string", description: "Model Gemini dla auto_vision (domyślnie gemini-3.6-flash; gemini-3.5-flash-lite ma większy limit dobowy)." },
       },
       ["channel", "count"],
     ),
@@ -238,6 +240,8 @@ export async function dispatch(env: Env, origin: string, st: any, name: string, 
         comments: a.comments !== false,
         channelStats: a.channel_stats !== false,
         estimateFirst: a.estimate_first !== false,
+        autoVision: bool(a.auto_vision, "auto_vision") === true,
+        visionModel: str(a.vision_model, "vision_model", false),
       });
       return r;
     }
