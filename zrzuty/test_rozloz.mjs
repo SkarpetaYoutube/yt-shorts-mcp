@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
 import { bezpiecznaNazwa, nazwaFolderuRolki, parseCsv, sekcjaMd, rozloz } from "./rozloz_na_rolki.mjs";
+import { tokeny, ocenaOcr } from "./ocr_sprawdz.mjs";
 import { INDEKS_KOLUMNY, liczbyZdjec, scalBaze, raportPartii } from "./indeks_i_baza.mjs";
 
 let ok = 0;
@@ -114,7 +115,7 @@ t("indeks kanału: jeden wiersz na rolkę, statusy zdjęć, ścieżka folderu, z
   assert.equal(c(r1, "folder"), "Kanał Test - Rolka ze zdjęciami test [AAAAAAAAAA1]");
   assert.equal(c(csv.find((r) => c(r, "id") === "AAAAAAAAAA2"), "zdjec_wg_gemini"), "0");
   assert.match(fs.readFileSync(path.join(kanal, "_zbiorczo", "indeks_rolek.md"), "utf8"), /\| 1 \| Rolka ze zdjęciami[^|]*\| 100 \|/);
-  assert.deepEqual(liczbyZdjec([]), { pelne: 0, czesciowe: 0, brak: 0, zweryf: 0, status: "bez zdjęć wg wizji lub brak analizy wizji" });
+  assert.deepEqual(liczbyZdjec([]), { pelne: 0, czesciowe: 0, brak: 0, zweryf: 0, ocrOk: 0, ocrBraki: 0, status: "bez zdjęć wg wizji lub brak analizy wizji" });
 });
 t("baza lokalna: scala eksporty bez duplikatów, zostaje najnowszy rekord, historia wyświetleń rośnie", () => {
   const baza = path.join(kanal, "_baza");
@@ -167,6 +168,29 @@ t("brak potwierdzonego wycinka: w zdjecia\\ trafia klatka ze zdjęciem z jawnym 
 });
 t("brak pliku JSON eksportu: czytelny błąd", () => {
   assert.throws(() => rozloz({ eksportDir: tmp, wyjscie: out }), /Brak pliku \*_json\.json/);
+});
+t("OCR (dopasowanie, bez uruchamiania OCR): widoczne, brak, błąd jednej litery, t/ł, wiadomości bez słów", () => {
+  assert.deepEqual(tokeny("Prove it!! 💀"), ["prove", "it"]);
+  assert.deepEqual(tokeny("prove ił", true), ["prove", "it"]);
+  const o = ocenaOcr([{ text: "Prove it" }, { text: "who stabs a chair" }, { text: "💀💀" }, { text: "Prove it" }], ["Prove ił to me"]);
+  assert.equal(o.status, "OCR_CZESCIOWY");
+  assert.deepEqual(o.widoczne, ["Prove it"]); assert.deepEqual(o.brakuje, ["who stabs a chair"]); assert.deepEqual(o.pominiete, ["💀💀"]);
+  assert.equal(ocenaOcr([{ text: "I am telling the truth today" }], ["i am telling the truth todai"]).status, "OCR_PELNY"); // 1 litera różnicy w słowie >= 4 znaki
+  assert.equal(ocenaOcr([{ text: "hello there" }], []).status, "OCR_BRAK_KLATEK");
+  assert.equal(ocenaOcr([{ text: "🙂" }], ["abc"]).status, "OCR_BRAK_DANYCH");
+});
+t("indeks i raport: kolumny OCR i sekcja rozbieżności (pełny wg programu, a OCR widzi braki)", () => {
+  const opis = [
+    { image_id: 1, status_pl: "x", zrzuty: { kategoria_kontekstu: "PELNY_NIEZWERYFIKOWANY" }, ocr: { status: "OCR_CZESCIOWY", brakuje: ["who stabs a chair"], widoczne: [], pominiete: [] } },
+    { image_id: 2, status_pl: "x", zrzuty: { kategoria_kontekstu: "PELNY_ZWERYFIKOWANY" }, ocr: { status: "OCR_PELNY", brakuje: [], widoczne: ["a"], pominiete: [] } },
+  ];
+  const l = liczbyZdjec(opis);
+  assert.equal(l.ocrOk, 1); assert.equal(l.ocrBraki, 1);
+  const md = raportPartii({ kanal: "K", pozycje: [{ rec: { video_id: "V1", title: "T" }, opis }], teraz: "2026-11-01T00:00:00Z" });
+  assert.match(md, /## Rozbieżność: ocena „pełny”, a OCR widzi braki/);
+  assert.match(md, /„who stabs a chair”/);
+  const bez = raportPartii({ kanal: "K", pozycje: [{ rec: { video_id: "V1", title: "T" }, opis: [opis[1]] }], teraz: "2026-11-01T00:00:00Z" });
+  assert.ok(!/Rozbieżność/.test(bez));
 });
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(process.exitCode ? "\nNIEPOWODZENIE" : `\nWSZYSTKO OK (${ok} testów)`);

@@ -71,7 +71,7 @@ else {
 # 3) foldery per rolka
 $zr = if (Test-Path (Join-Path $robocze "frames_manifest.json")) { $robocze } else { "-" }
 $only = if ($Tylko) { @("--only", $Tylko) } else { @() }
-node rozloz_na_rolki.mjs $tmp $zr $wyn @only 2>&1 | ForEach-Object { Log $_.ToString() }
+node rozloz_na_rolki.mjs $tmp $zr $wyn @only --ocr 2>&1 | ForEach-Object { Log $_.ToString() }
 $c2 = $LASTEXITCODE
 if ($c2 -ne 1 -and (Test-Path $kanalDir)) { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue } # pliki eksportu sa juz w _zbiorczo
 if (Test-Path (Join-Path $kanalDir "_zbiorczoRAPORT_PARTII.md")) { Log ("RAPORT: " + (Join-Path $kanalDir "_zbiorczoRAPORT_PARTII.md")) }

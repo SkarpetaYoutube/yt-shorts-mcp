@@ -15,6 +15,7 @@ import crypto from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { contextCategory, CTX_LABEL, shotFiles } from "./kontekst.mjs";
 import { wierszIndeksu, zapiszIndeks, scalBaze, raportPartii } from "./indeks_i_baza.mjs";
+import { uruchomOcr, ocenaOcr } from "./ocr_sprawdz.mjs";
 
 // ------------------------------------------------------------------------------------------------ nazwy
 /** Nazwa bezpieczna dla Windows: bez znaków niedozwolonych w nazwach, bez emoji, bez kropek i spacji na końcu, skrócona. */
@@ -102,6 +103,15 @@ export function opisZdjec(rec, man, exists, md5Of) {
   });
 }
 
+/** Jednozdaniowy opis wyniku OCR dla zdjęcia. */
+export function opisOcr(o) {
+  if (o.status === "OCR_PELNY") return `wszystkie wiadomości z wizji, które da się sprawdzić (${o.widoczne.length}), są widoczne na klatkach`;
+  if (o.status === "OCR_CZESCIOWY") return `NIE widać na klatkach: ${o.brakuje.map((x) => `„${x}”`).join(", ")} (widoczne: ${o.widoczne.length})`;
+  if (o.status === "OCR_BRAK_KLATEK") return "brak klatek do sprawdzenia";
+  if (o.status === "OCR_BLAD") return `OCR niedostępny (${o.blad ?? "?"})`;
+  return "wizja nie podała wiadomości do porównania";
+}
+
 function zdjeciaMd(rec, opis, zrzutyWykonane) {
   const L = [`# Zdjęcia w rolce: ${rec.title}`, "", `- ID: \`${rec.video_id}\` | link: ${rec.url}`, `- Status wizji (Gemini): ${rec.vision_status}`];
   if (!zrzutyWykonane) L.push("- Zrzuty klatek: nie wykonano dla tego eksportu.");
@@ -120,6 +130,7 @@ function zdjeciaMd(rec, opis, zrzutyWykonane) {
       if (z.gemini.uncertainty_pl) L.push(`- Niepewność wg Gemini: ${z.gemini.uncertainty_pl}`);
     } else L.push("- Gemini nie wykryło tego zdjęcia (wpis pochodzi ze zrzutów).");
     L.push(`- **Status: ${z.status_pl}**`);
+    if (z.ocr) L.push(`- Automatyczna kontrola tekstu (OCR): ${opisOcr(z.ocr)} (sprawdza tylko teksty wiadomości z wizji na zapisanych klatkach, nie treść zdjęcia; nie zastępuje przeglądu wzrokowego)`);
     if (z.zrzuty) {
       const r = z.zrzuty;
       L.push(`- Zmierzone na klatkach: ${r.zmierzony_przedzial_s[0] != null ? `${clock(r.zmierzony_przedzial_s[0])}–${clock(r.zmierzony_przedzial_s[1])}` : "brak"} | status zrzutu: ${r.status}`);
@@ -137,7 +148,7 @@ function zdjeciaMd(rec, opis, zrzutyWykonane) {
 const znajdz = (dir, re) => fs.readdirSync(dir).filter((f) => re.test(f)).sort((a, b) => a.localeCompare(b, "en", { numeric: true })).map((f) => path.join(dir, f));
 
 /** Zwraca podsumowanie: lista rolek (folder, liczba zdjęć, kategorie). */
-export function rozloz({ eksportDir, zrzutyDir = null, wyjscie, only = null }) {
+export function rozloz({ eksportDir, zrzutyDir = null, wyjscie, only = null, ocr = false }) {
   const jsonFile = znajdz(eksportDir, /_json\.json$|^json\.json$/)[0];
   if (!jsonFile) throw new Error(`Brak pliku *_json.json w ${eksportDir}`);
   const csvFile = znajdz(eksportDir, /_csv\.csv$/)[0] ?? null;
@@ -150,6 +161,19 @@ export function rozloz({ eksportDir, zrzutyDir = null, wyjscie, only = null }) {
   const man = zrzutyDir && fs.existsSync(path.join(zrzutyDir, "frames_manifest.json")) ? JSON.parse(fs.readFileSync(path.join(zrzutyDir, "frames_manifest.json"), "utf8")) : [];
   const exists = (f) => !!f && !!zrzutyDir && fs.existsSync(path.join(zrzutyDir, f));
   const md5Of = (f) => { try { return crypto.createHash("md5").update(fs.readFileSync(path.join(zrzutyDir, f))).digest("hex"); } catch { return null; } };
+  // opis zdjęć wszystkich rolek z góry; opcjonalnie jedno uruchomienie OCR dla wszystkich klatek (kontrola, czy wiadomości z wizji są widoczne na zapisanych klatkach)
+  const opisMap = new Map(recs.map((r) => [r.video_id, opisZdjec(r, man, exists, md5Of)]));
+  if (ocr && zrzutyDir) {
+    const pliki = [...new Set([...opisMap.values()].flatMap((o) => o.flatMap((z) => (z.zrzuty?.klatki ?? []).map((k) => path.join(zrzutyDir, k.plik)))))];
+    const wyn = uruchomOcr(pliki);
+    for (const o of opisMap.values()) for (const z of o) {
+      if (!z.zrzuty?.klatki?.length) continue;
+      const wyniki = z.zrzuty.klatki.map((k) => wyn.get(path.join(zrzutyDir, k.plik)));
+      const blad = wyniki.find((x) => !x || x.error);
+      z.ocr = blad ? { status: "OCR_BLAD", blad: blad?.error ?? "brak wyniku", widoczne: [], brakuje: [], pominiete: [] }
+        : ocenaOcr([...(z.gemini?.messages_before ?? []), ...(z.gemini?.messages_after ?? [])], wyniki.map((x) => x.text));
+    }
+  }
   const wynik = [];
   const pozycje = [];
   const kanaly = new Set();
@@ -166,7 +190,7 @@ export function rozloz({ eksportDir, zrzutyDir = null, wyjscie, only = null }) {
     if (sekcja) fs.writeFileSync(path.join(dir, "dane.md"), sekcja);
     // zdjęcia i klatki: foldery odtwarzane od zera (pochodne zrzutów), reszta plików zostaje
     for (const sub of ["zdjecia", "klatki"]) usunFolder(path.join(dir, sub));
-    const opis = opisZdjec(rec, man, exists, md5Of);
+    const opis = opisMap.get(rec.video_id);
     let wycinki = 0, klatki = 0;
     for (const z of opis) {
       if (!z.zrzuty) continue;
@@ -222,9 +246,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   const oi = args.indexOf("--only");
   const only = oi >= 0 ? args.splice(oi, 2)[1].split(",") : null;
+  const ocrI = args.indexOf("--ocr"); const ocr = ocrI >= 0; if (ocr) args.splice(ocrI, 1);
   const [eksportDir, zrzutyDir, wyjscie] = args;
   if (!eksportDir || !zrzutyDir || !wyjscie) { console.error("Użycie: node rozloz_na_rolki.mjs <folder_eksportu> <folder_zrzutow | -> <folder_wyjsciowy> [--only ID,ID]"); process.exit(2); }
-  const r = rozloz({ eksportDir, zrzutyDir: zrzutyDir === "-" ? null : zrzutyDir, wyjscie, only });
+  const r = rozloz({ eksportDir, zrzutyDir: zrzutyDir === "-" ? null : zrzutyDir, wyjscie, only, ocr });
   const sumy = {};
   for (const x of r.rolki) for (const [k, v] of Object.entries(x.kategorie)) sumy[k] = (sumy[k] ?? 0) + v;
   for (const x of r.rolki) console.log(`${x.video_id}: zdjęć ${x.zdjec}, wycinków ${x.wycinki}, klatek ${x.klatki}${x.ma_csv ? "" : " (BRAK wiersza CSV)"}${x.ma_md ? "" : " (BRAK sekcji MD)"} → ${x.folder}`);

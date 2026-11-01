@@ -56,3 +56,6 @@ node test_bramka.mjs      # wymaga Chromium od Playwrighta: npx playwright insta
 ```
 
 Uwaga: automatyczne otwieranie YouTube skryptem może być sprzeczne z jego regulaminem; decyzja o użyciu należy do Ciebie. Skrypt otwiera rolkę jak zwykły widz, nie pobiera plików wideo, nie omija reklam ani logowania.
+
+## Automatyczna kontrola klatek (OCR)
+`zbierz_rolki.ps1` wywołuje `rozloz_na_rolki.mjs ... --ocr`: OCR wbudowany w Windows (offline, `ocr_klatek.ps1`, wstępna obróbka w `png_proste.mjs`, dopasowanie w `ocr_sprawdz.mjs`) sprawdza, czy teksty wiadomości z wizji (przed/po zdjęciu) są widoczne na zapisanych klatkach. Wynik trafia do `zdjecia.md`, kolumn `ocr_zdjec_bez_brakow` / `ocr_zdjec_z_brakami` indeksu i do sekcji „Rozbieżność” w `RAPORT_PARTII.md`, gdy ocena „pełny” nie zgadza się z OCR. To NIE zastępuje audytu wzrokowego: OCR nie ocenia treści zdjęcia i bywa omylny (np. t/ł). Zgodność z ocenami wzrokowymi na 16 zdjęciach: 16/16 po korekcie jednej pomyłki audytu (jClk1CTeL6I#1).
