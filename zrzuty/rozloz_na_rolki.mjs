@@ -14,6 +14,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { contextCategory, CTX_LABEL, shotFiles } from "./kontekst.mjs";
+import { wierszIndeksu, zapiszIndeks, scalBaze } from "./indeks_i_baza.mjs";
 
 // ------------------------------------------------------------------------------------------------ nazwy
 /** Nazwa bezpieczna dla Windows: bez znaków niedozwolonych w nazwach, bez emoji, bez kropek i spacji na końcu, skrócona. */
@@ -150,6 +151,7 @@ export function rozloz({ eksportDir, zrzutyDir = null, wyjscie, only = null }) {
   const exists = (f) => !!f && !!zrzutyDir && fs.existsSync(path.join(zrzutyDir, f));
   const md5Of = (f) => { try { return crypto.createHash("md5").update(fs.readFileSync(path.join(zrzutyDir, f))).digest("hex"); } catch { return null; } };
   const wynik = [];
+  const pozycje = [];
   const kanaly = new Set();
   for (const rec of recs) {
     const kanalDir = path.join(wyjscie, bezpiecznaNazwa(rec.channel_title || rec.channel_handle, 40, "kanal"));
@@ -181,6 +183,7 @@ export function rozloz({ eksportDir, zrzutyDir = null, wyjscie, only = null }) {
     const kategorie = {};
     for (const z of opis) { const k = z.zrzuty?.kategoria_kontekstu ?? "BRAK_ZRZUTU"; kategorie[k] = (kategorie[k] ?? 0) + 1; }
     wynik.push({ video_id: rec.video_id, folder: dir, zdjec: opis.length, wycinki, klatki, kategorie, ma_csv: !!wiersz, ma_md: !!sekcja });
+    pozycje.push({ kanalDir, rec, opis, folder: path.relative(kanalDir, dir) });
   }
   // pliki eksportu całego kanału: bez zmian, do _zbiorczo
   for (const kanalDir of kanaly) {
@@ -192,7 +195,16 @@ export function rozloz({ eksportDir, zrzutyDir = null, wyjscie, only = null }) {
       fs.copyFileSync(f, path.join(zb, koncowka ? przedrostek + koncowka[1] : path.basename(f))); // np. Dozzek_json.json zamiast nazwy folderu tymczasowego
     }
   }
-  return { rolek: wynik.length, kanaly: [...kanaly], rolki: wynik };
+  // indeks kanału (jedna linia na rolkę, z tego eksportu) i lokalna baza główna (scala kolejne eksporty, zachowuje historię wyświetleń)
+  const baza = {};
+  for (const kanalDir of kanaly) {
+    const moje = pozycje.filter((p) => p.kanalDir === kanalDir);
+    const nazwa = path.basename(kanalDir);
+    zapiszIndeks(path.join(kanalDir, "_zbiorczo"), nazwa, moje.map((p, i) => wierszIndeksu(p.rec, p.opis, i + 1, p.folder)));
+    const b = scalBaze(path.join(kanalDir, "_baza"), nazwa, moje.map((p) => ({ rec: p.rec, opis: p.opis, folder: p.folder })));
+    baza[nazwa] = { rolek_w_bazie: b.rolek, nowe: b.nowe, odswiezone: b.odswiezone };
+  }
+  return { rolek: wynik.length, kanaly: [...kanaly], rolki: wynik, baza };
 }
 
 // ------------------------------------------------------------------------------------------------ CLI
@@ -200,7 +212,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const args = process.argv.slice(2);
   // pomocnicze dla zbierz_rolki.ps1: nazwa folderu kanału i lista ID rolek, które mają zdjęcia wg wizji
   if (args[0] === "--kanal" || args[0] === "--ids") {
-    const jf = znajdz(args[1], /_json.json$|^json.json$/)[0];
+    const jf = znajdz(args[1], /_json\.json$|^json\.json$/)[0];
     if (!jf) { console.error("Brak pliku *_json.json w " + args[1]); process.exit(2); }
     const rows = JSON.parse(fs.readFileSync(jf, "utf8"));
     console.log(args[0] === "--kanal" ? bezpiecznaNazwa(rows[0]?.channel_title || rows[0]?.channel_handle, 40, "kanal") : rows.filter((r) => r.vision?.images?.length).map((r) => r.video_id).join(","));
@@ -215,6 +227,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   for (const x of r.rolki) for (const [k, v] of Object.entries(x.kategorie)) sumy[k] = (sumy[k] ?? 0) + v;
   for (const x of r.rolki) console.log(`${x.video_id}: zdjęć ${x.zdjec}, wycinków ${x.wycinki}, klatek ${x.klatki}${x.ma_csv ? "" : " (BRAK wiersza CSV)"}${x.ma_md ? "" : " (BRAK sekcji MD)"} → ${x.folder}`);
   console.log(`ROZŁOŻONO: ${r.rolek} rolek; zdjęcia wg kategorii: ${JSON.stringify(sumy)}`);
+  for (const [k, b] of Object.entries(r.baza)) console.log(`BAZA ${k}: ${b.rolek_w_bazie} rolek w bazie lokalnej (nowe ${b.nowe}, odświeżone ${b.odswiezone}); indeks: ${k}\_zbiorczo\indeks_rolek.csv`);
   const brakuje = r.rolki.reduce((a, x) => a + Object.entries(x.kategorie).filter(([k]) => k === "BRAK" || k === "BRAK_ZRZUTU").reduce((b, [, v]) => b + v, 0), 0);
   process.exit(brakuje ? 2 : 0);
 }
