@@ -3,6 +3,7 @@
 // Użycie: node zloz_paczke.mjs <eksport.json> <folder_zrzutow (z frames_manifest.json)> <folder_paczki>
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { contextCategory, CTX, CTX_LABEL } from "./kontekst.mjs";
 const [expFile, framesDir, outDir, onlyArg] = process.argv.slice(2);
 const onlyIds = onlyArg ? onlyArg.split(",") : null;
@@ -18,7 +19,8 @@ const n = (x) => (x == null ? "brak danych" : Number(x).toLocaleString("pl-PL"))
 const L = [`# Paczka dla modelu — ${recs.length} rolek`, "", `Złożono automatycznie z: eksportu programu (${path.basename(expFile)}) i zrzutów klatek (${man.length} zdjęć). Opisy i powiązania zdjęć z wiadomościami to ocena modelu Gemini (nie potwierdzona przez człowieka); obrazy to rzeczywiste klatki z wideo. Czas „zmierzony" pochodzi ze sprawdzenia sąsiednich klatek (krok 0,25 s), czas „modelu" jest przybliżony.`, ""];
 const cropOk = (m) => m.crop_confirmed ?? (!!m.photo_file && !!m.confirmed);
 const exists = (f) => !!f && fs.existsSync(path.join(framesDir, f));
-const catOf = (m) => contextCategory(m, exists);
+const md5Of = (f) => { try { return crypto.createHash("md5").update(fs.readFileSync(path.join(framesDir, f))).digest("hex"); } catch { return null; } };
+const catOf = (m) => contextCategory(m, exists, md5Of); // „zweryfikowany” tylko, gdy treść kadrów jest taka sama jak w chwili audytu (md5)
 const ctxOk = (m) => CTX[catOf(m)] >= CTX.PELNY_NIEZWERYFIKOWANY; // „pełny” (zweryfikowany lub nie) — do wyboru, który status pokazać
 const ccLine = (m) => { const c = catOf(m), cc = m.content_check; let t = `Kontekst: **${CTX_LABEL[c]}**`;
   if (c.endsWith("_ZWERYFIKOWANY") && cc) t += ` (sprawdził: ${cc.checked_by ?? "?"}, ${cc.checked_at ?? "?"})${cc.missing?.length ? `; brakuje w kadrach: ${cc.missing.map((x) => `„${x}"`).join("; ")}` : ""}`;
@@ -57,13 +59,14 @@ recs.forEach((r, i) => {
         L.push(`${ccLine(m)} | ciasny wycinek: ${cropOk(m) ? "potwierdzony" : "niepotwierdzony"} | status programu: ${m.status ?? "?"}${m.note ? ` — ${m.note}` : ""}`, "");
         if (m.status === "WYMAGA_CZLOWIEKA") L.push(`**WYMAGA CZŁOWIEKA:** ${m.human_required}`, "");
         if (m.messages_needed?.length) L.push(`Wiadomości odnoszące się do zdjęcia (z wyniku modelu i transkryptu; czas = kiedy mają być już na ekranie): ${m.messages_needed.map((x) => `${clock(x.t)} ${x.sender ?? "?"}: „${x.text}"`).join(" | ")}`, "");
+        if (m.messages_before_needed?.length) L.push(`Wiadomości sprzed zdjęcia (z wyniku modelu i transkryptu; widoczne na screenie „przed”): ${m.messages_before_needed.map((x) => `${clock(x.t)} ${x.sender ?? "?"}: „${x.text}"`).join(" | ")}`, "");
         // 1) ciasny wycinek samego zdjęcia; 2) screeny kontekstu w kolejności czasu (prawdziwe, osobne klatki — nic nie jest doklejane)
         const items = [];
         if (cropOk(m)) items.push(["Wycinek zdjęcia (ciasny kadr)", m.photo_file, null]);
         else if (m.crop_diag?.file) items.push(["Wycinek NIEPOTWIERDZONY — klatka diagnostyczna z proponowanymi granicami (zielona: karta, czerwona: wycinek)", m.crop_diag.file, null]);
         else if (m.missing_diag?.file) items.push(["ZDJĘCIA NIE ZNALEZIONO — klatka diagnostyczna z chwili wskazanej przez model (to NIE jest screen rozmowy ze zdjęciem; służy do oceny wzrokowej)", m.missing_diag.file, null]);
         else L.push("Wycinek zdjęcia: niepotwierdzony, brak klatki diagnostycznej.", "");
-        if (m.context_shots?.length) for (const s of m.context_shots) items.push([`Screen kontekstu ${s.order ?? "?"} — ${({ zdjecie_i_reakcja: "zdjęcie i odnoszące się do niego wiadomości w jednej klatce", zdjecie_widoczne: "zdjęcie widoczne (reakcja pojawia się później)", w_trakcie: "klatka pośrednia", reakcja: "reakcja po zniknięciu zdjęcia" })[s.role] ?? s.role} (czas ${s.t_s != null ? clock(s.t_s) : "?"}${s.photo_visible === false ? ", zdjęcia już nie widać" : ""})`, s.file, s]);
+        if (m.context_shots?.length) for (const s of [...m.context_shots].sort((a, b) => (a.t_s ?? a.t_planned_s ?? 0) - (b.t_s ?? b.t_planned_s ?? 0))) items.push([`Screen kontekstu ${s.order ?? "?"} — ${({ przed: "wiadomości sprzed zdjęcia (klatka tuż przed jego pojawieniem się)", zdjecie_i_reakcja: "zdjęcie i odnoszące się do niego wiadomości w jednej klatce", zdjecie_widoczne: "zdjęcie widoczne (reakcja pojawia się później)", w_trakcie: "klatka pośrednia", reakcja: "reakcja po zniknięciu zdjęcia" })[s.role] ?? s.role} (czas ${s.t_s != null ? clock(s.t_s) : "?"}${s.photo_visible === false ? ", zdjęcia już nie widać" : ""})`, s.file, s]);
         else items.push(["Screen rozmowy (starszy format, bez kontekstu)", m.conversation_file, null]);
         for (const [label, f, s] of items) {
           if (!f) { L.push(`${label}: brak (${s?.error ?? (label.startsWith("Wycinek") ? "zdjęcie nie wykryte na klatkach" : "błąd zrzutu")})`, ""); missing++; continue; }
@@ -73,7 +76,7 @@ recs.forEach((r, i) => {
           fs.copyFileSync(src, path.join(outDir, f)); copied++;
           L.push(`${label}:`, "", `![${r.video_id} zdjęcie ${im.id} — ${label.split(" (")[0]}](${f})`, "");
         }
-        if (m.context_v === 2 && m.context_shots?.length > 1) L.push("Uwaga: zdjęcie i pełna reakcja nie mieściły się w jednej klatce — kolejne screeny to osobne, rzeczywiste klatki w kolejności czasu (nic nie jest doklejane).", "");
+        if (m.context_v === 2 && m.context_shots?.filter((s) => s.role !== "przed").length > 1) L.push("Uwaga: zdjęcie i pełna reakcja nie mieściły się w jednej klatce — kolejne screeny to osobne, rzeczywiste klatki w kolejności czasu (nic nie jest doklejane).", "");
       }
     }
     if (v.messages?.length) { L.push(`Wiadomości odczytane z ekranu (model, ${v.messages.length}):`, "", ...v.messages.map((x) => `- [${x.t ?? "?"}] ${x.sender ?? "?"}: ${x.text}`), ""); }

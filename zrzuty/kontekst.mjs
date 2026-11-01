@@ -31,6 +31,43 @@ export function neededMessages(im, segs) {
 }
 
 /**
+ * Wiadomości SPRZED zdjęcia (messages_before z wizji): zdjęcie na nie odpowiada, a po jego pojawieniu się bywają już poza kartą rozmowy
+ * (karta ma stały rozmiar w wideo, duże zdjęcie wypycha starsze wiadomości). Czas z korektą transkryptem; maks. 3, najbliższe zdjęciu.
+ */
+export function neededBefore(im, segs) {
+  const seen = new Set(); const out = [];
+  for (const m of (im.messages_before || [])) {
+    const k = (m.t || "") + "|" + (m.text || ""); if (seen.has(k)) continue; seen.add(k);
+    const r = refineMsgTime(m, segs); if (r.t != null) out.push({ t_model: sec(m.t), t: r.t, text: m.text, sender: m.sender, basis: r.basis });
+  }
+  out.sort((a, b) => a.t - b.t);
+  return out.slice(-3);
+}
+
+/**
+ * Czas kadru „przed”: klatka tuż przed pojawieniem się zdjęcia, gdy poprzednie wiadomości są jeszcze na karcie rozmowy (zdjęcie wjeżdża na kartę i wypycha je).
+ * Czas liczony z wizji (pierwsze pojawienie się zdjęcia wg modelu) i czasu ostatniej wiadomości „przed”, NIE z początku ciągu zmierzonego w skanie (p0 bywa później niż rzeczywiste
+ * pojawienie się zdjęcia: pierwsza próba na żywo trafiała w klatki, na których zdjęcie już było). Zakres: [ostatnia wiadomość + 0,4 s, początek zdjęcia − 0,2 s], docelowo początek − 0,6 s.
+ * alts: kolejne, wcześniejsze czasy do wypróbowania, gdy na klatce widać już zdjęcie (zapas nie schodzi poniżej ostatniej wiadomości + 0,15 s).
+ * Zwraca {shot, alts, code, why, tight}: brak wiadomości „przed” albo zdjęcie na początku wideo => shot=null z jawnym kodem (nigdy wyjątek).
+ * tight: ostatnia wiadomość „przed” pojawia się tuż przed zdjęciem, więc klatka może jej jeszcze nie pokazywać.
+ */
+export const BEFORE_WANT_S = 0.6, BEFORE_HI_S = 0.2, BEFORE_LO_S = 0.4, BEFORE_ALT_STEP_S = 0.4;
+export function chooseBeforeShot({ firstVisible, p0, before }) {
+  if (!before || !before.length) return { shot: null, alts: [], code: "BRAK_WIADOMOSCI_PRZED", why: "wizja nie podała wiadomości przed zdjęciem" };
+  const fv = Number.isFinite(firstVisible) ? firstVisible : p0; // czas wizji ma pierwszeństwo przed początkiem zmierzonego ciągu
+  const lastT = Math.max(...before.map((m) => m.t));
+  if (!Number.isFinite(fv) || !Number.isFinite(lastT)) return { shot: null, alts: [], code: "BLEDNE_DANE", why: "brak czasu pojawienia się zdjęcia albo wiadomości przed" };
+  const hi = fv - BEFORE_HI_S, lo = lastT + BEFORE_LO_S; const tight = lo > hi;
+  const r2 = (x) => Math.round(x * 100) / 100;
+  const t = r2(Math.min(hi, Math.max(lo, fv - BEFORE_WANT_S)));
+  if (t < 0.3) return { shot: null, alts: [], code: "ZDJECIE_NA_POCZATKU", why: `zdjęcie pojawia się na początku wideo (${fv.toFixed(2)} s): nie ma klatki sprzed niego` };
+  const floor = Math.max(0.3, lastT + 0.15); const alts = [];
+  for (let a = r2(t - BEFORE_ALT_STEP_S); a >= floor && alts.length < 2; a = r2(a - BEFORE_ALT_STEP_S)) alts.push(a);
+  return { shot: { t, role: "przed", needPhoto: false, reason: `klatka tuż przed pojawieniem się zdjęcia (wg wizji ${fv.toFixed(2)} s), po ostatniej wiadomości przed nim (${lastT.toFixed(2)} s)${tight ? "; ostatnia wiadomość pojawia się tuż przed zdjęciem" : ""}` }, alts, tight, code: "OK", why: "ok" };
+}
+
+/**
  * Wybiera czasy screenów kontekstowych.
  * rows: [{t, ok, box:[x,y,w,h]|null}] ze skanu okna; midT: czas znalezionego zdjęcia; k: skala (videoWidth/360); tReady: kiedy wszystkie potrzebne wiadomości są już na ekranie.
  * Zasada: zdjęcie ma być w pełni widoczne (rozmiar jak w środku przebiegu, nie ucięte) i mają być już widoczne wiadomości do niego.
@@ -127,23 +164,31 @@ export const CTX_LABEL = {
   BRAK: "brak screena ze zdjęciem",
 };
 export const shotFiles = (e, exists = () => true) => (e?.context_shots || []).filter((s) => s.file && exists(s.file));
-export function checkValid(e, exists = () => true) {
+/** Ocena wzrokowa jest ważna tylko dla dokładnie tych plików. md5Of (plik → suma md5 albo null): gdy podane, zmiana TREŚCI kadru pod tą samą nazwą też unieważnia ocenę. */
+export function checkValid(e, exists = () => true, md5Of = null) {
   const cc = e?.content_check; if (!cc) return false;
   const now = shotFiles(e, exists).map((s) => s.file).sort().join("|");
-  return now === (cc.files || []).map((f) => f.file).sort().join("|");
+  if (now !== (cc.files || []).map((f) => f.file).sort().join("|")) return false;
+  if (md5Of) for (const f of cc.files || []) if (f.md5 && md5Of(f.file) !== f.md5) return false;
+  return true;
 }
-export function contextCategory(e, exists = () => true) {
+export function contextCategory(e, exists = () => true, md5Of = null) {
   const shots = shotFiles(e, exists);
   if (!shots.length || !shots.some((s) => s.photo_visible)) return "BRAK";
-  if (checkValid(e, exists)) { const r = e.content_check.result; if (r === "PELNY") return "PELNY_ZWERYFIKOWANY"; if (r === "CZESCIOWY") return "CZESCIOWY_ZWERYFIKOWANY"; if (r === "BLEDNY") return "BRAK"; }
-  return e.context_complete ? "PELNY_NIEZWERYFIKOWANY" : "CZESCIOWY_NIEZWERYFIKOWANY";
+  if (checkValid(e, exists, md5Of)) { const r = e.content_check.result; if (r === "PELNY") return "PELNY_ZWERYFIKOWANY"; if (r === "CZESCIOWY") return "CZESCIOWY_ZWERYFIKOWANY"; if (r === "BLEDNY") return "BRAK"; }
+  // before_complete === false: wizja podała wiadomości sprzed zdjęcia, a kadru „przed” nie udało się zapisać (wpisy sprzed tej zmiany nie mają pola)
+  if (e.context_complete) return e.before_complete === false ? "CZESCIOWY_NIEZWERYFIKOWANY" : "PELNY_NIEZWERYFIKOWANY";
+  return "CZESCIOWY_NIEZWERYFIKOWANY";
 }
+export const hasBeforeShot = (e, exists = () => true) => shotFiles(e, exists).some((s) => s.role === "przed");
 export const ctxScore = (e, exists) => (e ? CTX[contextCategory(e, exists)] : -1);
 /** Najlepszy zapisany wynik vs ostatnia próba: nowa próba zastępuje poprzedni wynik TYLKO gdy jest lepsza; remis = zostaje poprzedni. */
 export function mergeBest(prevE, newE, exists = () => true, at = new Date().toISOString()) {
   const sNew = ctxScore(newE, exists), sOld = ctxScore(prevE, exists);
   const brief = (x) => ({ attempt_no: x.attempt_no ?? 1, at: x.attempt_at ?? null, status: x.status ?? null, category: contextCategory(x, exists), note: x.note ?? null, files: shotFiles(x, exists).map((s) => s.file) });
-  if (prevE && sOld >= sNew) {
+  // remis kategorii: nowa próba z kadrem „przed” zastępuje zapisany wynik bez niego (wcześniej remis zostawiał stary)
+  const gainsBefore = !!prevE && sOld === sNew && hasBeforeShot(newE, exists) && !hasBeforeShot(prevE, exists);
+  if (prevE && sOld >= sNew && !gainsBefore) {
     return { ...prevE, attempts_total: Math.max(prevE.attempts_total ?? prevE.attempt_no ?? 1, newE.attempt_no ?? 1), last_attempt: { ...brief(newE), at, adopted: false, why: `nie lepsza od zapisanego wyniku (${contextCategory(newE, exists)} vs ${contextCategory(prevE, exists)})` } };
   }
   return { ...newE, attempts_total: newE.attempt_no ?? 1, last_attempt: { ...brief(newE), at, adopted: true }, ...(prevE ? { replaced_best: brief(prevE) } : {}) };

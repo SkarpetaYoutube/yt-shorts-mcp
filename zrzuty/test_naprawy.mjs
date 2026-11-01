@@ -2,7 +2,7 @@
 // Użycie: node test_naprawy.mjs <test_Dozzek_5_json.json> <frames_manifest.json>
 import fs from "node:fs";
 import assert from "node:assert";
-import { neededMessages, chooseShots, resolveOwners, assignRun, sec } from "./kontekst.mjs";
+import { neededMessages, chooseShots, resolveOwners, assignRun, sec, contextCategory, mergeBest } from "./kontekst.mjs";
 const recs = JSON.parse(fs.readFileSync(process.argv[2], "utf8")); const man = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
 const rec = (id) => recs.find((r) => r.video_id === id);
 const rows = (a, b, box = [100, 300, 400, 500], step = 0.25) => { const o = []; for (let t = a; t <= b + 1e-6; t += step) o.push({ t: Math.round(t * 100) / 100, ok: true, box }); return o; };
@@ -50,5 +50,27 @@ assert.strictEqual(chooseShots({ rows: rows(1, 2), midT: 1.5, k: 1, tReady: NaN 
 {
   const o = resolveOwners([{ key: "#1", model: [10, 14], cands: [{ from: 10, to: 13, n: 12 }] }, { key: "#2", model: [20, 25], cands: [{ from: 13.2, to: 13.5, n: 2 }, { from: 21, to: 24, n: 12 }] }], 0.5);
   assert(o[0].run.from === 10 && o[1].run.from === 21 && o[1].lostTo[0] === "#1", "drugi kandydat po utracie pierwszego");
+}
+// 6) kadr „przed”: kategoria i mergeBest (remis kategorii: wynik z kadrem „przed” zastępuje zapisany bez niego, nie odwrotnie)
+{
+  const main = { role: "zdjecie_i_reakcja", file: "a.png", photo_visible: true };
+  const przed = { role: "przed", file: "b.png", photo_visible: false };
+  const old = { context_shots: [main], context_complete: true };
+  const withBefore = { context_shots: [main, przed], context_complete: true, before_complete: true };
+  const beforeFailed = { context_shots: [main, { role: "przed", file: null, error: "x" }], context_complete: true, before_complete: false };
+  assert.strictEqual(contextCategory(old), "PELNY_NIEZWERYFIKOWANY", "wpis sprzed zmiany (bez pola) bez zmian");
+  assert.strictEqual(contextCategory(withBefore), "PELNY_NIEZWERYFIKOWANY");
+  assert.strictEqual(contextCategory(beforeFailed), "CZESCIOWY_NIEZWERYFIKOWANY", "wizja podała wiadomości przed, a kadru brak → nie pełny");
+  assert.strictEqual(mergeBest(old, withBefore).context_shots.length, 2, "remis + nowy ma kadr przed → nowy");
+  assert.strictEqual(mergeBest(withBefore, old).context_shots.length, 2, "remis + stary ma kadr przed → stary zostaje");
+  assert.strictEqual(mergeBest(old, beforeFailed).context_shots.length, 1, "nieudany kadr przed nie pogarsza zapisanego wyniku");
+  assert.strictEqual(mergeBest(old, { ...old }).context_shots.length, 1, "zwykły remis: stary zostaje");
+  const audited = { ...old, content_check: { result: "PELNY", files: [{ file: "a.png" }] } };
+  assert.strictEqual(mergeBest(audited, withBefore).content_check?.result, "PELNY", "zweryfikowany pełny nie ustępuje niezweryfikowanemu");
+  // ocena wzrokowa jest związana z treścią plików (md5), nie tylko z ich nazwami
+  const md5Audited = { ...old, content_check: { result: "PELNY", files: [{ file: "a.png", md5: "aaa" }] } };
+  assert.strictEqual(contextCategory(md5Audited, () => true, () => "aaa"), "PELNY_ZWERYFIKOWANY", "ta sama treść → ocena ważna");
+  assert.strictEqual(contextCategory(md5Audited, () => true, () => "bbb"), "PELNY_NIEZWERYFIKOWANY", "inna treść pod tą samą nazwą → ocena unieważniona");
+  assert.strictEqual(contextCategory(md5Audited), "PELNY_ZWERYFIKOWANY", "bez funkcji md5 zachowanie jak dotąd (tylko nazwy plików)");
 }
 console.log("TESTY NAPRAWY: OK");

@@ -7,6 +7,7 @@ param(
 $ErrorActionPreference = "Continue"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $root = Split-Path $PSScriptRoot -Parent
+$dlScript = if (Test-Path (Join-Path $root "pobierz_zestaw.ps1")) { Join-Path $root "pobierz_zestaw.ps1" } else { Join-Path $root "scripts\pobierz_zestaw.ps1" }
 $dir = Join-Path $root (Join-Path "wyniki" $Nazwa)
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 $log = Join-Path $dir "pomiar_log.txt"
@@ -16,7 +17,7 @@ $T0 = Get-Date
 Log ("START " + $T0.ToString("o"))
 # 1) pobranie
 $s = Get-Date
-& (Join-Path $root "pobierz_zestaw.ps1") -Manifest $Manifest -Nazwa $Nazwa 2>&1 | ForEach-Object { Log $_.ToString() }
+& $dlScript -Manifest $Manifest -Nazwa $Nazwa 2>&1 | ForEach-Object { Log $_.ToString() }
 $tPobr = [math]::Round(((Get-Date) - $s).TotalSeconds, 1)
 Log "CZAS pobranie_eksportu_s: $tPobr"
 $json = Join-Path $dir ($Nazwa + "_json.json")

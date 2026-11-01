@@ -9,6 +9,7 @@ param(
 $ErrorActionPreference = "Continue"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $root = Split-Path $PSScriptRoot -Parent
+$dlScript = if (Test-Path (Join-Path $root "pobierz_zestaw.ps1")) { Join-Path $root "pobierz_zestaw.ps1" } else { Join-Path $root "scripts\pobierz_zestaw.ps1" }
 $wyn = Join-Path $root "wyniki"
 New-Item -ItemType Directory -Force -Path $wyn | Out-Null
 $log = Join-Path $wyn "test_calosc_log.txt"
@@ -49,7 +50,7 @@ if (Test-Path $src) { Copy-Item $src $jA -Force; Etap "kontekst_przyklady" $jA "
 
 # B) 5 rolek: pobranie eksportu (z Gemini) i zrzuty
 $sB = Get-Date
-& (Join-Path $root "pobierz_zestaw.ps1") -Manifest $Manifest -Nazwa $Nazwa 2>&1 | ForEach-Object { Log $_.ToString() }
+& $dlScript -Manifest $Manifest -Nazwa $Nazwa 2>&1 | ForEach-Object { Log $_.ToString() }
 Log ("CZAS pobranie_eksportu_s: " + [math]::Round(((Get-Date) - $sB).TotalSeconds, 1))
 $jB = Join-Path $wyn "$Nazwa\${Nazwa}_json.json"
 if (-not (Test-Path $jB)) { Log "BLAD: brak $jB - przerywam"; exit 1 }

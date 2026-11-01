@@ -8,10 +8,11 @@
 // Użycie: node zrzuty.mjs <eksport.json> <folder_wyjsciowy> [--local folder_z_mp4] [--channel msedge|chrome|chromium] [--only ID,ID] [--pause 6]
 import { chromium } from "playwright";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { neededMessages, chooseShots, resolveOwners, assignRun, ctxScore, contextCategory, mergeBest, CTX } from "./kontekst.mjs";
+import { neededMessages, neededBefore, chooseBeforeShot, chooseShots, resolveOwners, assignRun, ctxScore, contextCategory, mergeBest, CTX } from "./kontekst.mjs";
 import { handleGate, startConsentWatcher } from "./bramka.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -80,6 +81,9 @@ const records = JSON.parse(fs.readFileSync(inFile, "utf8")).filter((r) => r.visi
   .map((r) => (onlyImages ? { ...r, vision: { ...r.vision, images: r.vision.images.filter((im) => onlyImages.includes(im.id)) } } : r)).filter((r) => r.vision.images.length);
 const diagFile = path.join(outDir, "diagnostyka.log");
 fs.mkdirSync(outDir, { recursive: true });
+// ponowne uruchomienie nie nadpisuje poprzedniego logu ani podsumowania przebiegu: stary plik dostaje sygnaturę czasu (nic nie jest kasowane)
+const archiveOld = (p) => { if (fs.existsSync(p) && fs.statSync(p).size > 0) fs.renameSync(p, p.replace(/\.(log|json)$/, `.stary-${Date.now()}.$1`)); };
+archiveOld(diagFile);
 fs.writeFileSync(diagFile, "");
 const D = (m) => { const l = `[${new Date().toISOString()}] ${m}`; console.log(l); fs.appendFileSync(diagFile, l + "\n"); };
 fs.mkdirSync(outDir, { recursive: true });
@@ -337,6 +341,43 @@ async function processReel(rec, ch) {
           e.context_shots.push({ order: n, role: sh.role, file: rel, t_s: Math.round(got.t_actual * 100) / 100, t_planned_s: sh.t, resolution: `${got.img.w}x${got.img.h}`, source_resolution: `${got.img.source_w}x${got.img.source_h}`, photo_visible: got.photo_visible, card_box_px: got.card, reason: sh.reason });
           D(`  zdjęcie ${im.id}: screen ${n} (${sh.role}) t=${got.t_actual.toFixed(2)} s ${got.img.w}x${got.img.h} zdjęcie widoczne=${got.photo_visible}`);
         }
+        // kadr „przed”: wiadomości sprzed zdjęcia (messages_before). Po pojawieniu się zdjęcia karta rozmowy bywa już bez nich (karta ma stały rozmiar w wideo), więc osobna klatka tuż przed zdjęciem.
+        // Jego niepowodzenie nie unieważnia kadrów ze zdjęciem: ustawia tylko before_complete=false (kategoria „częściowy”); nie przerywa pracy nad zdjęciem.
+        {
+          const beforeMsgs = neededBefore(im, rec.transcript_timed || []); e.messages_before_needed = beforeMsgs;
+          const bp = chooseBeforeShot({ firstVisible: sec(im.first_visible), p0: (pick.run || r.run)[0], before: beforeMsgs });
+          e.before_shot_plan = bp.shot ? { t: bp.shot.t, tight: !!bp.tight } : { code: bp.code, why: bp.why }; e.before_complete = true;
+          if (bp.shot) {
+            let gotB = null, whyB = null, usedT = null;
+            // Czas z wizji i wiadomości „przed” (nie z początku zmierzonego ciągu). Ścisły detektor zdjęcia odrzuca klatki, na których zdjęcie już jest; wtedy próbujemy wcześniejszych czasów (alts).
+            // Każde wywołanie to jedna próba: bez przeładowań i bez zużywania budżetu ponowień rolki (dodatkowy kadr nie może pogorszyć reszty rolki).
+            const once = (fn, arg) => withTimeout(page.evaluate(fn, arg), Math.min(callMaxS * 1000, Math.max(1000, left())), "kadr przed");
+            try {
+              if (player.exhausted) throw new Error(`pominięty (${player.exhausted})`);
+              guard();
+              if (!(await once(() => !!window.__fr))) throw new Error("brak biblioteki na stronie");
+              const refW = e.context_shots.find((x) => x.card_box_px)?.card_box_px?.[2] ?? null; const tried = [];
+              for (const tt of [bp.shot.t, ...bp.alts]) {
+                const s2 = await once(([t, np]) => window.__fr.shotAt(t, np), [tt, false]);
+                const wOk = !refW || !s2.card || Math.abs(s2.card[2] - refW) <= 0.08 * refW; // karta o innej szerokości niż na kadrze głównym = animacja wjazdu zdjęcia
+                tried.push({ t: tt, ok: !!s2.ok, photo_visible: !!s2.photo_visible, card_w_ok: wOk, why: s2.ok ? null : s2.why });
+                if (s2.ok && !s2.photo_visible && wOk) { gotB = s2; usedT = tt; break; }
+                whyB = !s2.ok ? `t=${tt}: ${s2.why}` : s2.photo_visible ? `t=${tt}: zdjęcie już widoczne` : `t=${tt}: karta o innej szerokości (animacja?)`;
+              }
+              e.before_tried = tried;
+            } catch (eb) { whyB = String(eb.message).split("\n")[0]; }
+            if (gotB) {
+              n++; const relB = `frames/${rec.video_id}/zdjecie${im.id}${e.file_suffix}_kontekst${n}_przed.png`; keepOld(relB);
+              fs.writeFileSync(path.join(outDir, relB), Buffer.from(gotB.img.data, "base64"));
+              e.context_shots.push({ order: n, role: "przed", file: relB, t_s: Math.round(gotB.t_actual * 100) / 100, t_planned_s: usedT, resolution: `${gotB.img.w}x${gotB.img.h}`, source_resolution: `${gotB.img.source_w}x${gotB.img.source_h}`, photo_visible: gotB.photo_visible, card_box_px: gotB.card, reason: `${bp.shot.reason}${usedT !== bp.shot.t ? "; wcześniejszy czas (na pierwszym zdjęcie było już widoczne)" : ""}` });
+              D(`  zdjęcie ${im.id}: kadr „przed” (${n}) t=${gotB.t_actual.toFixed(2)} s; wiadomości przed: ${beforeMsgs.length}${bp.tight ? " (ostatnia tuż przed zdjęciem)" : ""}`);
+            } else {
+              e.before_complete = false; e.context_shots.push({ role: "przed", t_planned_s: bp.shot.t, file: null, error: whyB, reason: bp.shot.reason });
+              D(`  zdjęcie ${im.id}: kadr „przed” NIE zapisany: ${whyB}`);
+            }
+          } else D(`  zdjęcie ${im.id}: kadr „przed” pominięty (${bp.code}: ${bp.why})`);
+          e.note += `; kadr przed: ${bp.shot ? (e.before_complete ? "zapisany" : "NIE zapisany") : bp.code}`;
+        }
         if (allOk && pick.shots[0].needPhoto && !e.context_shots.some((x) => x.file && x.photo_visible)) { allOk = false; e.context_error = "żaden screen kontekstu nie pokazuje zdjęcia"; }
         e.context_v = 2; e.context_complete = allOk; e.context_confirmed = allOk; e.conversation_file = e.context_shots.find((x) => x.file)?.file ?? null;
         e.timing_s.kontekst = Math.round((Date.now() - tPh) / 100) / 10;
@@ -450,7 +491,8 @@ for (const rec0 of records) {
 if (server) server.close();
 try { session?.stopWatch?.(); await session?.ctx.close(); } catch {}
 const all = finalize(runTimedOut ? `limit całej próby ${maxTotalS} s` : "nie przetworzono");
-const cat = (c) => all.filter((m) => contextCategory(m, exists) === c).length;
+const md5Of = (f) => { try { return crypto.createHash("md5").update(fs.readFileSync(path.join(outDir, f))).digest("hex"); } catch { return null; } };
+const cat = (c) => all.filter((m) => contextCategory(m, exists, md5Of) === c).length;
 const nPV = cat("PELNY_ZWERYFIKOWANY"), nPN = cat("PELNY_NIEZWERYFIKOWANY"), nCV = cat("CZESCIOWY_ZWERYFIKOWANY"), nCN = cat("CZESCIOWY_NIEZWERYFIKOWANY"), nB = cat("BRAK");
 const cropOk = all.filter((m) => ctxScore(m, exists) >= CTX.PELNY_NIEZWERYFIKOWANY && m.crop_confirmed && exists(m.photo_file)).length;
 const retries = (fs.readFileSync(diagFile, "utf8").match(/ponawiam|przeładowuję/g) || []).length;
@@ -458,6 +500,7 @@ const summary = { czas_s: Math.round((Date.now() - t0) / 1000), limit_calosci_s:
   kontekst_pelny_zweryfikowany: nPV, kontekst_pelny_niezweryfikowany: nPN, kontekst_czesciowy_zweryfikowany: nCV, kontekst_czesciowy_niezweryfikowany: nCN, brak_screena_ze_zdjeciem: nB, wycinek_potwierdzony: cropOk,
   uwaga: "program nie sprawdza treści kadrów; „pełny niezweryfikowany” wymaga kontroli wzrokowej (audyt.mjs)",
   interwencje_uzytkownika: humanRequired, ekrany_zgody_napotkane: stats.consent_screens, zgoda_odrzucona_automatycznie: stats.consent_rejected, uruchomienia_przegladarki: stats.session_launches, odtworzenia_sesji: stats.session_restores, ponowienia: retries, przegladarki: stats.browsers_used, blokady: stats.human_required, czasy_rolek_s: stats.reel_times || {}, rolki_przerwane_limitem_czasu: stats.reel_timeouts || 0, odtwarzacz_na_rolke: stats.player_by_reel || {} };
+archiveOld(path.join(outDir, "przebieg.json"));
 fs.writeFileSync(path.join(outDir, "przebieg.json"), JSON.stringify(summary, null, 1));
 D(`PRZEBIEG: ${JSON.stringify(summary)}`);
 D(`WYNIK: ${all.length} zdjęć | pełny zweryfikowany ${nPV} | pełny NIEZWERYFIKOWANY ${nPN} | częściowy zweryfikowany ${nCV} | częściowy niezweryfikowany ${nCN} | brak ${nB} | czas ${summary.czas_s} s (limit ${maxTotalS} s)${runTimedOut ? " | PRZERWANO LIMITEM CAŁEJ PRÓBY" : ""}. Folder: ${outDir}`);

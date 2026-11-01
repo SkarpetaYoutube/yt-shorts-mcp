@@ -9,6 +9,7 @@ param(
 $ErrorActionPreference = "Continue"
 $TylkoStr = ($Tylko -join ",").Trim(",")
 $root = Split-Path $PSScriptRoot -Parent
+$dlScript = if (Test-Path (Join-Path $root "pobierz_zestaw.ps1")) { Join-Path $root "pobierz_zestaw.ps1" } else { Join-Path $root "scripts\pobierz_zestaw.ps1" }
 $safe = ($Nazwa -replace '[^\w\-]', '_')
 $dir = Join-Path $root (Join-Path "wyniki" $safe)
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
@@ -21,7 +22,7 @@ Log ("START " + $t0.ToString("o"))
 $json = Join-Path $dir ($safe + "_json.json")
 if (-not (Test-Path $json)) {
   if ($Manifest -eq "") { Log "BLAD: brak $json i nie podano -Manifest"; exit 1 }
-  & (Join-Path $root "pobierz_zestaw.ps1") -Manifest $Manifest -Nazwa $safe 2>&1 | ForEach-Object { Log $_.ToString() }
+  & $dlScript -Manifest $Manifest -Nazwa $safe 2>&1 | ForEach-Object { Log $_.ToString() }
 } else { Log "Uzywam juz pobranego JSON: $json (bez pobierania)" }
 Set-Location $PSScriptRoot
 if (-not (Test-Path (Join-Path $PSScriptRoot "node_modules\playwright"))) { Log "npm install (jednorazowo)"; npm install 2>&1 | ForEach-Object { Log $_.ToString() } }

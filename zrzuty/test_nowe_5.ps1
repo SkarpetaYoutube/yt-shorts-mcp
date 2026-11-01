@@ -8,6 +8,7 @@ param(
 $ErrorActionPreference = "Continue"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $root = Split-Path $PSScriptRoot -Parent
+$dlScript = if (Test-Path (Join-Path $root "pobierz_zestaw.ps1")) { Join-Path $root "pobierz_zestaw.ps1" } else { Join-Path $root "scripts\pobierz_zestaw.ps1" }
 $wyn = Join-Path $root "wyniki"; New-Item -ItemType Directory -Force -Path $wyn | Out-Null
 $log = Join-Path $wyn "test_nowe_5_log.txt"
 function Log($t) { Write-Host $t; Add-Content -Path $log -Value $t -Encoding UTF8 }
@@ -16,7 +17,7 @@ Set-Location $PSScriptRoot
 if (-not (Test-Path (Join-Path $PSScriptRoot "node_modules\playwright"))) { Log "npm install (jednorazowo)"; npm install 2>&1 | ForEach-Object { Log $_.ToString() } }
 $T0 = Get-Date; Log ("START " + $T0.ToString("o"))
 $s = Get-Date
-& (Join-Path $root "pobierz_zestaw.ps1") -Manifest $Manifest -Nazwa $Nazwa 2>&1 | ForEach-Object { Log $_.ToString() }
+& $dlScript -Manifest $Manifest -Nazwa $Nazwa 2>&1 | ForEach-Object { Log $_.ToString() }
 $tD = [math]::Round(((Get-Date) - $s).TotalSeconds, 1); Log "CZAS pobranie_eksportu_s: $tD"
 $dir = Join-Path $wyn $Nazwa; $json = Join-Path $dir "${Nazwa}_json.json"
 if (-not (Test-Path $json)) { Log "BLAD: brak $json"; exit 1 }
