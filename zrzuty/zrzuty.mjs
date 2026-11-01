@@ -330,17 +330,27 @@ async function processReel(rec, ch) {
         }
         D(`  zdjęcie ${im.id}: kontekst — wiadomości potrzebne (${needMsgs.length}) do ${tReady == null ? "brak" : tReady.toFixed(2)} s; plan: ${pick.shots.map((x) => `${x.role}@${x.t}`).join(", ") || "BRAK"}; ponownie użyto ${(r.rows || []).length} klatek z fazy A`);
         for (const sh of pick.shots) {
-          let got = null, why2 = null;
+          let got = null, why2 = null, fallbackOff = null;
           for (const off of (sh.exact ? [0] : sh.needPhoto ? [0, -0.25, -0.5, -0.75] : [0, 0.25, 0.5, -0.25])) {
             const tt = Math.max(0, Math.round((sh.t + off) * 100) / 100);
             const s2 = await run(([t, np]) => window.__fr.shotAt(t, np), [tt, sh.needPhoto]);
             if (s2.ok) { got = s2; break; } why2 = `t=${tt}: ${s2.why}`; D(`  zdjęcie ${im.id}: screen kontekstu odrzucony ${why2}`);
           }
+          // kadr bez wymogu zdjęcia (reakcja / w trakcie), który odpadł (np. karta rozmowy znika z ekranu przed planowanym czasem): zapasowa, WCZEŚNIEJSZA klatka z kartą rozmowy.
+          // Zapisujemy ją, ale kontekst zostaje oznaczony jako niekompletny (klatka sprzed planowanej chwili może nie pokazywać ostatnich wiadomości).
+          if (!got && !sh.needPhoto && !sh.exact) {
+            for (const off of [-0.5, -0.8, -1.2, -1.8]) {
+              const tt = Math.max(0, Math.round((sh.t + off) * 100) / 100);
+              const s2 = await run(([t, np]) => window.__fr.shotAt(t, np), [tt, false]);
+              if (s2.ok) { got = s2; fallbackOff = off; break; } D(`  zdjęcie ${im.id}: zapasowy screen odrzucony t=${tt}: ${s2.why}`);
+            }
+          }
           if (!got) { allOk = false; e.context_shots.push({ role: sh.role, t_planned_s: sh.t, file: null, error: why2, reason: sh.reason }); continue; }
+          if (fallbackOff != null) { allOk = false; D(`  zdjęcie ${im.id}: ${sh.role}: użyto zapasowej, wcześniejszej klatki (${fallbackOff} s względem planu): kontekst niekompletny`); }
           n++;
           const rel = `frames/${rec.video_id}/zdjecie${im.id}${e.file_suffix}_kontekst${n}_${sh.role}.png`; keepOld(rel);
           fs.writeFileSync(path.join(outDir, rel), Buffer.from(got.img.data, "base64"));
-          e.context_shots.push({ order: n, role: sh.role, file: rel, t_s: Math.round(got.t_actual * 100) / 100, t_planned_s: sh.t, resolution: `${got.img.w}x${got.img.h}`, source_resolution: `${got.img.source_w}x${got.img.source_h}`, photo_visible: got.photo_visible, card_box_px: got.card, reason: sh.reason });
+          e.context_shots.push({ order: n, role: sh.role, file: rel, t_s: Math.round(got.t_actual * 100) / 100, t_planned_s: sh.t, resolution: `${got.img.w}x${got.img.h}`, source_resolution: `${got.img.source_w}x${got.img.source_h}`, photo_visible: got.photo_visible, card_box_px: got.card, reason: fallbackOff != null ? `${sh.reason}; ZAPASOWA wcześniejsza klatka (${fallbackOff} s względem planu): planowana chwila odpadła, ostatnie wiadomości mogą nie być widoczne` : sh.reason, ...(fallbackOff != null ? { fallback_earlier_s: fallbackOff } : {}) });
           D(`  zdjęcie ${im.id}: screen ${n} (${sh.role}) t=${got.t_actual.toFixed(2)} s ${got.img.w}x${got.img.h} zdjęcie widoczne=${got.photo_visible}`);
         }
         // kadr „przed”: wiadomości sprzed zdjęcia (messages_before). Po pojawieniu się zdjęcia karta rozmowy bywa już bez nich (karta ma stały rozmiar w wideo), więc osobna klatka tuż przed zdjęciem.
