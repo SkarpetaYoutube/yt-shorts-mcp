@@ -14,6 +14,7 @@ import {
   rawToSegments,
   rawToText,
   resolveChannel,
+  tcacheKey,
   sdFetchRaw,
   sdLimit,
   sdPollJob,
@@ -383,6 +384,53 @@ export class Store extends DurableObject<Env> {
       note: "Transkrypcje nie są pobierane. Jednostki YouTube: lista filmów/statystyki + 1 na film za komentarze (gdy włączone).",
     };
     return st;
+  }
+
+  /**
+   * Uzupełnia znaczniki czasu transkrypcji zapisanych starszą wersją serwera (bez segmentów i bez zapisanej przyczyny).
+   * Segmenty pochodzą z pamięci podręcznej transkrypcji (ta sama odpowiedź Supadata, którą zapisano przy pobraniu): bez zapytań sieciowych i bez kredytów.
+   * Segmenty są zapisywane tylko wtedy, gdy złożone dają dokładnie zapisany tekst; inaczej przyczyna braku jest zapisana jawnie.
+   */
+  async backfillTimestamps(jobId: string): Promise<any> {
+    const job = this.loadJob(jobId);
+    if (job.running) throw new UserError("Zadanie jeszcze pracuje. Uzupełnić znaczniki czasu można w zadaniu zatrzymanym albo zakończonym.");
+    const sql = this.ctx.storage.sql;
+    const s = this.svc();
+    const rows = sql.exec("SELECT vid, url, transcript FROM items WHERE job=? AND status IN ('ok','empty') AND segs IS NULL AND sgst IS NULL ORDER BY ord", jobId).toArray();
+    const res = { candidates: rows.length, filled: 0, no_segments_in_cached_response: 0, mismatch_not_stored: 0, cache_missing: 0, cache_missing_ids: [] as string[] };
+    const keys: [string | null, string][] = [[job.lang, job.transcriptMode], [null, "native"], [null, "auto"]];
+    for (const r of rows) {
+      let hit: string | null = null;
+      for (const [lang, mode] of keys) {
+        hit = cacheGet(s, tcacheKey(String(r.url), lang, mode));
+        if (hit) break;
+      }
+      if (!hit) {
+        res.cache_missing++;
+        if (res.cache_missing_ids.length < 50) res.cache_missing_ids.push(String(r.vid));
+        continue;
+      }
+      const raw = JSON.parse(hit);
+      const text = String(r.transcript ?? "");
+      const segs = rawToSegments(raw);
+      let segsJson: string | null = null;
+      let why: string;
+      if (!segs.length) { why = "no_segments_in_response"; res.no_segments_in_cached_response++; }
+      else if (rawToText(raw) !== text || segs.map((x) => x[2]).join(" ") !== text) { why = "mismatch_not_stored"; res.mismatch_not_stored++; }
+      else { why = "ok"; segsJson = JSON.stringify(segs); res.filled++; }
+      sql.exec("UPDATE items SET segs=?, sgst=? WHERE job=? AND vid=?", segsJson, why, jobId, String(r.vid));
+    }
+    if (rows.length - res.cache_missing > 0) {
+      this.bump(job); // dane zadania się zmieniły: gotowe eksporty tego zadania nie są ponownie używane
+      this.saveJob(job);
+    }
+    return {
+      ...res,
+      credits_used: 0,
+      note: res.cache_missing
+        ? "Dla części rolek nie ma odpowiedzi w pamięci podręcznej (wygasła albo pobrano ją innym trybem/językiem): ich czasy wymagałyby ponownego pobrania z Supadata (kredyty). Zostają bez zmian (unknown_not_recorded)."
+        : "Wszystkie kandydatki uzupełniono z pamięci podręcznej; kredyty Supadata nie zostały użyte.",
+    };
   }
 
   async status(jobId: string): Promise<any> {
@@ -1593,7 +1641,7 @@ void PauseError;
 // Klasy błędów nie przechodzą przez granicę RPC (zostaje zwykły Error), więc błędy użytkownika oznaczamy prefiksem.
 export const UE_PREFIX = "UE:";
 for (const name of [
-  "startJob", "resume", "refresh", "status", "list", "read", "singleTranscript", "resolve", "usage",
+  "startJob", "resume", "refresh", "backfillTimestamps", "status", "list", "read", "singleTranscript", "resolve", "usage",
   "startSet", "setInfo", "startExport", "exportInfo", "exportChunks", "startVision", "visionStatus", "visionBatch",
 ] as const) {
   const orig = (Store.prototype as any)[name] as (...a: unknown[]) => Promise<unknown>;

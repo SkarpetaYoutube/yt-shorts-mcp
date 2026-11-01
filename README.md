@@ -54,6 +54,14 @@ Wynik wizji każdej rolki trafia do wspólnego eksportu bez utraty szczegółów
 - `get_collection_status` ma pole `vision`: `ok`, `in_progress`, `failed`, `not_analyzed` oraz listę partii zlecanych dla zadania. Gotowe wyniki trafiają do eksportu automatycznie.
 - Nieudane rolki: `analyze_images` z `retry_batch` (jak dotąd).
 
+### Wersja 2.7: uzupełnianie znaczników czasu
+
+`continue_collection` z `fill_timestamps=true` (zadanie zatrzymane lub zakończone) uzupełnia znaczniki czasu transkrypcji zapisanych starszą wersją serwera
+(`transcript_timed_status = unknown_not_recorded`). Segmenty biorą się z pamięci podręcznej transkrypcji (ta sama odpowiedź Supadata, którą zapisano przy pobraniu, ważność 365 dni):
+**bez zapytań sieciowych i bez kredytów**. Segmenty są zapisywane tylko wtedy, gdy złożone dają dokładnie zapisany tekst; inaczej przyczyna jest jawna
+(`mismatch_not_stored`, `no_segments_in_response`), a rolki bez odpowiedzi w pamięci podręcznej zostają bez zmian i są wymienione w `timestamps_backfill.cache_missing_ids`.
+Tekst transkrypcji nigdy nie jest nadpisywany. Po uzupełnieniu zmienia się wersja danych zadania, więc kolejny `export_collection` buduje nowy zestaw.
+
 ### Rozpoznawanie zdjęć w rolkach (Gemini, próbnie)
 
 `analyze_images` wysyła publiczny link rolki do Gemini API (`generateContent`, `fileData.fileUri` + `videoMetadata.fps`,

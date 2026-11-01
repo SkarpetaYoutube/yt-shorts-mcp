@@ -48,6 +48,7 @@ export const TOOLS = [
       wait_seconds: { type: "integer", minimum: 0, maximum: 25, default: 20 },
       retry_failed: { type: "boolean", default: false, description: "Ponów też nieudane: error_service, error_video i komentarze ze statusem error" },
       transcript_mode: { type: "string", enum: ["native", "auto"], description: "Zmień tryb; auto ponowi też filmy bez napisów" },
+      fill_timestamps: { type: "boolean", default: false, description: "Uzupełnij znaczniki czasu transkrypcji zapisanych starszą wersją serwera (zadanie zatrzymane lub zakończone): z pamięci podręcznej serwera, bez zapytań sieciowych i bez kredytów Supadata" },
     }, ["job_id"]),
   },
   { name: "get_collection_status", description: "Status zadania: postęp, problemy (brak napisów, błędy), przyczyna zatrzymania.", inputSchema: obj({ job_id: jobId }, ["job_id"]) },
@@ -234,8 +235,11 @@ export async function dispatch(env: Env, origin: string, st: any, name: string, 
     case "continue_collection": {
       const id = str(a.job_id, "job_id")!;
       const tm = a.transcript_mode == null ? null : oneOf(a.transcript_mode, "transcript_mode", ["native", "auto"] as const, "native");
+      if (a.fill_timestamps != null && typeof a.fill_timestamps !== "boolean") throw new UserError("fill_timestamps: true albo false.");
+      const backfill = a.fill_timestamps === true ? await st.backfillTimestamps(id) : null;
       await st.resume(id, { retryFailed: a.retry_failed === true, transcriptMode: tm });
-      return await waitFor(int(a.wait_seconds, "wait_seconds", 20), () => st.status(id), (s: any) => s.complete || !s.running);
+      const status = await waitFor(int(a.wait_seconds, "wait_seconds", 20), () => st.status(id), (s: any) => s.complete || !s.running);
+      return backfill ? { ...status, timestamps_backfill: backfill } : status;
     }
     case "get_collection_status":
       return await st.status(str(a.job_id, "job_id")!);
