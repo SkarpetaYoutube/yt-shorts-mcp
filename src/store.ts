@@ -527,11 +527,17 @@ export class Store extends DurableObject<Env> {
       await this.scheduleAlarm(0);
       return;
     }
-    // 2) jeden przebieg rozpoznawania zdjęć (Gemini); długie czekanie na odpowiedź to czas zegarowy, nie CPU
-    if (await this.visionStepAny()) {
+    // 2) jeden przebieg rozpoznawania zdjęć (Gemini); długie czekanie na odpowiedź to czas zegarowy, nie CPU.
+    // Gdy równocześnie pracuje zbieranie rolek, alarmy na zmianę: wizja (najwyżej ~40 s), potem krok zbierania. Wcześniej kolejka Gemini zajmowała alarmy bez przerwy
+    // (do 8 min każdy) i zbieranie nowej rolki czekało na koniec całej partii wizji.
+    const collecting = sql.exec("SELECT id FROM jobs").toArray().some((r) => this.loadJob(String(r.id)).running);
+    const visionTurn = !(collecting && this.kvGet("alarm_last") === "vision");
+    if (visionTurn && (await this.visionStepAny(collecting ? 40_000 : undefined))) {
+      this.kvSet("alarm_last", "vision");
       await this.scheduleAlarm(0);
       return;
     }
+    this.kvSet("alarm_last", "job");
     // 2) jedno zadanie na alarm: każdy krok ma własny limit subżądań i CPU
     const ids = sql.exec("SELECT id FROM jobs ORDER BY updated ASC").toArray().map((r) => String(r.id));
     for (const id of ids) {
@@ -1368,7 +1374,7 @@ export class Store extends DurableObject<Env> {
    * Kolejka: do `concurrency` wywołań naraz (okno przesuwne), odstęp między startami, opcjonalny limit tokenów/min,
    * wstrzymanie po 429. Jedno wywołanie alarmu robi najwyżej 40 wywołań (limit subżądań planu Free).
    */
-  private async visionStepAny(): Promise<boolean> {
+  private async visionStepAny(maxMs = 8 * 60_000): Promise<boolean> {
     const sql = this.ctx.storage.sql;
     this.visRecoverStale();
     const toCancel = this.visCfg().cancel;
@@ -1395,7 +1401,7 @@ export class Store extends DurableObject<Env> {
     const worker = async () => {
       for (;;) {
         // alarm może trwać najwyżej 15 min; pojedyncze wywołanie ma limit 5 min, więc nowych nie zaczynamy po 8 min
-        if (launched >= MAX_CALLS || Date.now() - t0 > 8 * 60_000) return;
+        if (launched >= MAX_CALLS || Date.now() - t0 > maxMs) return;
         const now = Date.now();
         const cands = sql.exec("SELECT id, next_at, json_extract(state,'$.model_requested') AS model FROM vis WHERE status='pending' ORDER BY created ASC LIMIT 100").toArray();
         if (!cands.length) {

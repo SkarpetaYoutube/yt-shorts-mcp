@@ -129,6 +129,25 @@ describe("wizja całego zadania (analyze_images z job_id)", () => {
     expect(new Set(urls).size).toBe(5);
   });
 
+  it("duża kolejka wizji nie głodzi zbierania: gdy pracuje zadanie, alarmy idą na zmianę (wizja, zbieranie)", async () => {
+    await setEnv({ GEMINI_DAILY_CALLS: "1000" }); // domyślny bezpiecznik 250 mniejszy niż 400 przebiegów testu
+    const batch = (from: number) => Array.from({ length: 200 }, (_, i) => "ZZZZZZZ" + String(from + i).padStart(4, "0"));
+    await stub().startVision({ videos: batch(0), fps: [1], model: MODEL });
+    await stub().startVision({ videos: batch(200), fps: [1], model: MODEL }); // 400 przebiegów = 10 alarmów samej wizji
+    const { job_id } = await stub().startJob({ channel: "@przyklad", mode: "newest", count: 50, transcriptMode: "native", lang: null });
+    let done = false, pendingAtDone = -1;
+    for (let i = 0; i < 40 && !done; i++) {
+      await runDurableObjectAlarm(stub());
+      if (!(await stub().status(job_id)).running) { done = true; pendingAtDone = Number((await sql("SELECT COUNT(*) AS n FROM vis WHERE status='pending'"))[0].n); }
+    }
+    expect(done).toBe(true);
+    // zadanie skończyło się, a kolejka wizji wciąż ma zaległości (bez poprawki zbieranie czekałoby na koniec całej kolejki)
+    expect(pendingAtDone).toBeGreaterThan(0);
+    expect((await stub().status(job_id)).complete).toBe(true);
+    await finish(); // reszta wizji i tak się kończy
+    expect(w.geminiCalls).toHaveLength(400);
+  }, 120000);
+
   it("nieudane rolki są widoczne w statusie jako failed i da się je ponowić (retry_batch)", async () => {
     await setEnv({ GEMINI_MAX_ATTEMPTS: "1" });
     const job = await makeJob(5);
