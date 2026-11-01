@@ -90,7 +90,7 @@ t("zdjęcia i klatki skopiowane; status każdego zdjęcia jawny (jest / brak zrz
   assert.deepEqual(r.rolki.find((x) => x.video_id === "AAAAAAAAAA1").kategorie, { PELNY_NIEZWERYFIKOWANY: 1, BRAK_ZRZUTU: 1 });
 });
 t("_zbiorczo: pliki eksportu bez zmian, nazwane od kanału", () => {
-  assert.deepEqual(fs.readdirSync(path.join(kanal, "_zbiorczo")).sort(), ["Kanał Test_csv.csv", "Kanał Test_json.json", "Kanał Test_md-1.md", "Kanał Test_md-2.md", "Kanał Test_status.json", "indeks_rolek.csv", "indeks_rolek.md"]);
+  assert.deepEqual(fs.readdirSync(path.join(kanal, "_zbiorczo")).sort(), ["Kanał Test_csv.csv", "Kanał Test_json.json", "Kanał Test_md-1.md", "Kanał Test_md-2.md", "Kanał Test_status.json", "RAPORT_PARTII.md", "indeks_rolek.csv", "indeks_rolek.md"]);
   assert.equal(fs.readFileSync(path.join(kanal, "_zbiorczo", "Kanał Test_json.json"), "utf8"), fs.readFileSync(path.join(exp, "k_json.json"), "utf8"));
 });
 t("ponowne uruchomienie: odtwarza zdjęcia/klatki od zera, nie zostawia starych plików; --only i brak zrzutów", () => {
