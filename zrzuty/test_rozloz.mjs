@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
 import { bezpiecznaNazwa, nazwaFolderuRolki, parseCsv, sekcjaMd, rozloz } from "./rozloz_na_rolki.mjs";
-import { INDEKS_KOLUMNY, liczbyZdjec, scalBaze } from "./indeks_i_baza.mjs";
+import { INDEKS_KOLUMNY, liczbyZdjec, scalBaze, raportPartii } from "./indeks_i_baza.mjs";
 
 let ok = 0;
 const t = (nazwa, fn) => { try { fn(); ok++; console.log("OK   ", nazwa); } catch (e) { console.log("BŁĄD", nazwa, "\n     ", e.message); process.exitCode = 1; } };
@@ -137,6 +137,22 @@ t("baza lokalna: scala eksporty bez duplikatów, zostaje najnowszy rekord, histo
   const csv = parseCsv(fs.readFileSync(path.join(dir2, "baza_rolek.csv"), "utf8").replace(/^﻿/, ""));
   const ix = csv[0].indexOf("przyrost_od_pierwszego_pomiaru");
   assert.equal(csv.find((x) => x[csv[0].indexOf("id")] === "AAAAAAAAAA1")[ix], "300");
+});
+t("raport partii: liczby zdjęć, rolki z danymi odtwarzacza, lista do ponowienia z komendą; kopie bazy (maks. 5)", () => {
+  const raport = fs.readFileSync(path.join(kanal, "_zbiorczo", "RAPORT_PARTII.md"), "utf8");
+  assert.match(raport, /# Raport partii: Kanał Test/);
+  assert.match(raport, /Rolek: 3; zdjęć wg Gemini: 2/);
+  assert.match(raport, /pełne: \*\*1\*\*, częściowe: \*\*0\*\*, brak: \*\*1\*\*/);
+  assert.match(raport, /## Do ponowienia lub sprawdzenia[\s\S]*`AAAAAAAAAA1` zdjęcie 2[\s\S]*zrzutów nie wykonano/);
+  assert.match(raport, /-Tylko AAAAAAAAAA1/);
+  assert.match(raport, /brak danych \(rolka nie była w ostatnim przebiegu zrzutów\)/);
+  // wszystko pełne: brak listy ponowień
+  const pelny = raportPartii({ kanal: "K", pozycje: [{ rec: recs[1], opis: [{ image_id: 1, zrzuty: { kategoria_kontekstu: "PELNY_ZWERYFIKOWANY" }, status_pl: "ok" }] }], przebieg: { czas_s: 5, odtwarzacz_na_rolke: { AAAAAAAAAA2: { incidents: 2, reloads: 1, exhausted: null } } } });
+  assert.match(pelny, /Nic: wszystkie zdjęcia mają pełny kontekst/); assert.match(pelny, /\| 2 \/ 1 \|/);
+  const dir = path.join(tmp, "baza_kopie");
+  for (let i = 1; i <= 8; i++) scalBaze(dir, "K", [{ rec: recs[0], opis: [], folder: "f" }], `2026-11-0${i}T10:00:00Z`);
+  const kopie = fs.readdirSync(path.join(dir, "kopie")).sort();
+  assert.equal(kopie.length, 5); assert.ok(kopie[0].includes("2026-11-04") && kopie.at(-1).includes("2026-11-08")); // kopie poprzednich wersji, najstarsze usuwane
 });
 t("brak potwierdzonego wycinka: w zdjecia\\ trafia klatka ze zdjęciem z jawnym oznaczeniem", () => {
   const zr2 = path.join(tmp, "zrzuty2"); fs.mkdirSync(path.join(zr2, "frames", "AAAAAAAAAA1"), { recursive: true });

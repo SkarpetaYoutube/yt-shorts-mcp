@@ -14,7 +14,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { contextCategory, CTX_LABEL, shotFiles } from "./kontekst.mjs";
-import { wierszIndeksu, zapiszIndeks, scalBaze } from "./indeks_i_baza.mjs";
+import { wierszIndeksu, zapiszIndeks, scalBaze, raportPartii } from "./indeks_i_baza.mjs";
 
 // ------------------------------------------------------------------------------------------------ nazwy
 /** Nazwa bezpieczna dla Windows: bez znaków niedozwolonych w nazwach, bez emoji, bez kropek i spacji na końcu, skrócona. */
@@ -201,6 +201,8 @@ export function rozloz({ eksportDir, zrzutyDir = null, wyjscie, only = null }) {
     const moje = pozycje.filter((p) => p.kanalDir === kanalDir);
     const nazwa = path.basename(kanalDir);
     zapiszIndeks(path.join(kanalDir, "_zbiorczo"), nazwa, moje.map((p, i) => wierszIndeksu(p.rec, p.opis, i + 1, p.folder)));
+    let przebieg = null; try { przebieg = zrzutyDir ? JSON.parse(fs.readFileSync(path.join(zrzutyDir, "przebieg.json"), "utf8")) : null; } catch { /* brak przebiegu: raport bez danych odtwarzacza */ }
+    fs.writeFileSync(path.join(kanalDir, "_zbiorczo", "RAPORT_PARTII.md"), raportPartii({ kanal: nazwa, pozycje: moje, przebieg }));
     const b = scalBaze(path.join(kanalDir, "_baza"), nazwa, moje.map((p) => ({ rec: p.rec, opis: p.opis, folder: p.folder })));
     baza[nazwa] = { rolek_w_bazie: b.rolek, nowe: b.nowe, odswiezone: b.odswiezone };
   }

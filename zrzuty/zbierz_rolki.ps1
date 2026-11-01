@@ -58,6 +58,15 @@ else {
       $c1 = $LASTEXITCODE
     } else { Log "Druga runda pominieta: za malo czasu z limitu calosci ($zostalo s)" }
   }
+  # trzecia runda tylko dla tego, co nadal zawodzi: nizsza jakosc obrazu (720p, mniej danych = mniej buforowania), wiekszy budzet ponowien; brak w calosci poprawia sie, jakosc moze byc nizsza (oznaczone w statusie)
+  if (($c1 -eq 1 -or $c1 -eq 2) -and -not $BezDrugiejRundy) {
+    $zostalo = $MaxCalosc - [int]((Get-Date) - $s).TotalSeconds
+    if ($zostalo -gt 150) {
+      Log "TRZECIA RUNDA (nizsza jakosc obrazu, wiekszy budzet ponowien; zostalo $zostalo s)"; Start-Sleep -Seconds 20
+      node zrzuty.mjs $json $robocze --channel msedge --only $ids --pause 3 --max-total ([math]::Max(60, $zostalo - 20)) --reel-max ($MaxRolka + 120) --quality hd720,hd480 --reloads 5 --retry-budget 240 --buffer-wait 45 2>&1 | ForEach-Object { Log $_.ToString() }
+      $c1 = $LASTEXITCODE
+    }
+  }
 }
 # 3) foldery per rolka
 $zr = if (Test-Path (Join-Path $robocze "frames_manifest.json")) { $robocze } else { "-" }
@@ -65,6 +74,7 @@ $only = if ($Tylko) { @("--only", $Tylko) } else { @() }
 node rozloz_na_rolki.mjs $tmp $zr $wyn @only 2>&1 | ForEach-Object { Log $_.ToString() }
 $c2 = $LASTEXITCODE
 if ($c2 -ne 1 -and (Test-Path $kanalDir)) { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue } # pliki eksportu sa juz w _zbiorczo
+if (Test-Path (Join-Path $kanalDir "_zbiorczoRAPORT_PARTII.md")) { Log ("RAPORT: " + (Join-Path $kanalDir "_zbiorczoRAPORT_PARTII.md")) }
 Log ("KONIEC " + (Get-Date).ToString("o") + "; calosc: " + [math]::Round(((Get-Date) - $T0).TotalSeconds, 1) + " s | folder kanalu: $kanalDir")
 # kod wyjscia: 0 komplet, 2 czesc zdjec bez zrzutu, 4 limit czasu zrzutow, 1 blad
 exit ([math]::Max([int]$(if ($c1 -eq 3) { 0 } else { $c1 }), [int]$c2))
