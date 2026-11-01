@@ -227,7 +227,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   for (const x of r.rolki) for (const [k, v] of Object.entries(x.kategorie)) sumy[k] = (sumy[k] ?? 0) + v;
   for (const x of r.rolki) console.log(`${x.video_id}: zdjęć ${x.zdjec}, wycinków ${x.wycinki}, klatek ${x.klatki}${x.ma_csv ? "" : " (BRAK wiersza CSV)"}${x.ma_md ? "" : " (BRAK sekcji MD)"} → ${x.folder}`);
   console.log(`ROZŁOŻONO: ${r.rolek} rolek; zdjęcia wg kategorii: ${JSON.stringify(sumy)}`);
-  for (const [k, b] of Object.entries(r.baza)) console.log(`BAZA ${k}: ${b.rolek_w_bazie} rolek w bazie lokalnej (nowe ${b.nowe}, odświeżone ${b.odswiezone}); indeks: ${k}\_zbiorczo\indeks_rolek.csv`);
+  for (const [k, b] of Object.entries(r.baza)) console.log(`BAZA ${k}: ${b.rolek_w_bazie} rolek w bazie lokalnej (nowe ${b.nowe}, odświeżone ${b.odswiezone}); indeks: ${k}\\_zbiorczo\\indeks_rolek.csv`);
   const brakuje = r.rolki.reduce((a, x) => a + Object.entries(x.kategorie).filter(([k]) => k === "BRAK" || k === "BRAK_ZRZUTU").reduce((b, [, v]) => b + v, 0), 0);
   process.exit(brakuje ? 2 : 0);
 }
