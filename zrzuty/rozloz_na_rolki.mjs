@@ -94,7 +94,7 @@ export function opisZdjec(rec, man, exists, md5Of) {
       image_id: id,
       gemini: g ? { first_visible: g.first_visible, last_visible: g.last_visible, description_pl: g.description_pl, text_in_image: g.text_in_image, sent_by: g.sent_by, messages_before: g.messages_before, messages_after: g.messages_after, uncertainty_pl: g.uncertainty_pl } : null,
       zrzuty: e
-        ? { status: e.status, kategoria_kontekstu: kategoria, opis_kategorii: CTX_LABEL[kategoria], zmierzony_przedzial_s: [e.measured_first_s ?? null, e.measured_last_s ?? null], wycinek: e.photo_file && exists(e.photo_file) ? e.photo_file : null, klatki: shotFiles(e, exists).map((s) => ({ rola: s.role, plik: s.file, t_s: s.t_s })), uwaga_programu: e.note ?? null, sprawdzenie_wzrokowe: e.content_check ?? null }
+        ? { status: e.status, kategoria_kontekstu: kategoria, opis_kategorii: CTX_LABEL[kategoria], zmierzony_przedzial_s: [e.measured_first_s ?? null, e.measured_last_s ?? null], wycinek: e.photo_file && exists(e.photo_file) ? e.photo_file : null, klatki: shotFiles(e, exists).map((s) => ({ rola: s.role, plik: s.file, t_s: s.t_s, zdjecie_widoczne: !!s.photo_visible })), uwaga_programu: e.note ?? null, sprawdzenie_wzrokowe: e.content_check ?? null }
         : null,
       status_pl: e ? CTX_LABEL[kategoria] : rec.vision ? "zrzutów dla tego zdjęcia nie wykonano (brak wpisu w manifeście zrzutów)" : "brak analizy wizji i zrzutów",
     };
@@ -122,7 +122,7 @@ function zdjeciaMd(rec, opis, zrzutyWykonane) {
     if (z.zrzuty) {
       const r = z.zrzuty;
       L.push(`- Zmierzone na klatkach: ${r.zmierzony_przedzial_s[0] != null ? `${clock(r.zmierzony_przedzial_s[0])}–${clock(r.zmierzony_przedzial_s[1])}` : "brak"} | status zrzutu: ${r.status}`);
-      L.push(`- Samo zdjęcie: ${r.wycinek ? `\`zdjecia\\${czystaNazwa(r.wycinek)}\`` : "brak pliku"}`);
+      L.push(`- Samo zdjęcie: ${r.wycinek ? `\`zdjecia\\${czystaNazwa(r.wycinek)}\`` : r.klatka_zamiast_wycinka ? `brak wycinka (program nie potwierdził granic zdjęcia); w zdjecia\\ jest klatka rozmowy, na której zdjęcie widać: \`${r.klatka_zamiast_wycinka}\`` : "brak pliku"}`);
       for (const k of r.klatki) L.push(`- Klatka (${k.rola}, ${clock(k.t_s)}): \`klatki\\${czystaNazwa(k.plik)}\``);
       if (r.uwaga_programu) L.push(`- Uwaga programu: ${r.uwaga_programu}`);
       if (r.sprawdzenie_wzrokowe) L.push(`- Sprawdzenie wzrokowe: ${r.sprawdzenie_wzrokowe.result} (${r.sprawdzenie_wzrokowe.checked_by ?? "?"}, ${r.sprawdzenie_wzrokowe.checked_at ?? "?"})${r.sprawdzenie_wzrokowe.note ? ` — ${r.sprawdzenie_wzrokowe.note}` : ""}`);
@@ -169,6 +169,11 @@ export function rozloz({ eksportDir, zrzutyDir = null, wyjscie, only = null }) {
     for (const z of opis) {
       if (!z.zrzuty) continue;
       if (z.zrzuty.wycinek) { fs.mkdirSync(path.join(dir, "zdjecia"), { recursive: true }); fs.copyFileSync(path.join(zrzutyDir, z.zrzuty.wycinek), path.join(dir, "zdjecia", czystaNazwa(z.zrzuty.wycinek))); wycinki++; }
+      else {
+        // brak potwierdzonego wycinka (detektor nie ustalił granic zdjęcia): w zdjecia\ trafia klatka rozmowy, na której zdjęcie widać, z jawnym oznaczeniem w nazwie
+        const k = z.zrzuty.klatki.find((x) => x.zdjecie_widoczne);
+        if (k) { fs.mkdirSync(path.join(dir, "zdjecia"), { recursive: true }); fs.copyFileSync(path.join(zrzutyDir, k.plik), path.join(dir, "zdjecia", `zdjecie${z.image_id}_klatka_ze_zdjeciem.png`)); z.zrzuty.klatka_zamiast_wycinka = `zdjecia\\zdjecie${z.image_id}_klatka_ze_zdjeciem.png`; }
+      }
       for (const k of z.zrzuty.klatki) { fs.mkdirSync(path.join(dir, "klatki"), { recursive: true }); fs.copyFileSync(path.join(zrzutyDir, k.plik), path.join(dir, "klatki", czystaNazwa(k.plik))); klatki++; }
     }
     fs.writeFileSync(path.join(dir, "zdjecia.json"), JSON.stringify({ video_id: rec.video_id, vision_status: rec.vision_status, zrzuty_wykonane: man.some((m) => m.video_id === rec.video_id), zdjecia: opis }, null, 1));

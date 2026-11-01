@@ -102,6 +102,17 @@ t("ponowne uruchomienie: odtwarza zdjęcia/klatki od zera, nie zostawia starych 
   assert.deepEqual(r2.rolki[0].kategorie, { BRAK_ZRZUTU: 2 }); // bez zrzutów: każde zdjęcie z wizji ma jawny status braku
   assert.ok(!fs.existsSync(path.join(out2, "Kanał Test", "Kanał Test - Rolka ze zdjęciami test [AAAAAAAAAA1]", "zdjecia")));
 });
+t("brak potwierdzonego wycinka: w zdjecia\\ trafia klatka ze zdjęciem z jawnym oznaczeniem", () => {
+  const zr2 = path.join(tmp, "zrzuty2"); fs.mkdirSync(path.join(zr2, "frames", "AAAAAAAAAA1"), { recursive: true });
+  fs.writeFileSync(path.join(zr2, "frames", "AAAAAAAAAA1", "zdjecie1_kontekst1_zdjecie_widoczne.png"), "PNG:klatka");
+  fs.writeFileSync(path.join(zr2, "frames_manifest.json"), JSON.stringify([{ video_id: "AAAAAAAAAA1", image_id: 1, status: "KONTEKST_NIEKOMPLETNY", confirmed: false, photo_file: null, context_shots: [{ order: 1, role: "zdjecie_widoczne", file: "frames/AAAAAAAAAA1/zdjecie1_kontekst1_zdjecie_widoczne.png", t_s: 1.5, photo_visible: true }] }]));
+  const out3 = path.join(tmp, "wyniki3");
+  rozloz({ eksportDir: exp, zrzutyDir: zr2, wyjscie: out3, only: ["AAAAAAAAAA1"] });
+  const d = path.join(out3, "Kanał Test", "Kanał Test - Rolka ze zdjęciami test [AAAAAAAAAA1]");
+  assert.equal(fs.readFileSync(path.join(d, "zdjecia", "zdjecie1_klatka_ze_zdjeciem.png"), "utf8"), "PNG:klatka");
+  assert.match(fs.readFileSync(path.join(d, "zdjecia.md"), "utf8"), /brak wycinka \(program nie potwierdził granic zdjęcia\)/);
+  assert.ok(fs.existsSync(path.join(d, "klatki", "zdjecie1_kontekst1_zdjecie_widoczne.png"))); // oryginalna klatka zostaje też w klatki\
+});
 t("brak pliku JSON eksportu: czytelny błąd", () => {
   assert.throws(() => rozloz({ eksportDir: tmp, wyjscie: out }), /Brak pliku \*_json\.json/);
 });
