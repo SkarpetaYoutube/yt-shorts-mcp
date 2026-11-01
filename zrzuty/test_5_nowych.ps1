@@ -41,7 +41,7 @@ if ($c1 -eq 2 -and -not $BezDrugiejRundy) {
   $zostalo = $MaxCalosc - [int]((Get-Date) - $s).TotalSeconds
   if ($zostalo -gt 120) {
     Log "DRUGA RUNDA dla rolek z brakami (z limitu calosci zostalo $zostalo s)"; Start-Sleep -Seconds 20
-    node zrzuty.mjs $json $zr --channel msedge --only $ids --pause 3 --max-total ([math]::Max(60, $zostalo - 20)) --reel-max $MaxRolka 2>&1 | ForEach-Object { Log $_.ToString() }
+    node zrzuty.mjs $json $zr --channel msedge --only $ids --pause 3 --max-total ([math]::Max(60, $zostalo - 20)) --reel-max $MaxRolka --reloads 4 --retry-budget 180 --buffer-wait 30 2>&1 | ForEach-Object { Log $_.ToString() }
     $c1 = $LASTEXITCODE
   } else { Log "Druga runda pominieta: za malo czasu z limitu calosci ($zostalo s)" }
 }

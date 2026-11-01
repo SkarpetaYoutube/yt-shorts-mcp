@@ -66,7 +66,9 @@ assert(refineMsgTime({ t: "0:10.0", text: "zzz qqq xxx" }, rec.transcript_timed)
   const p1 = chooseBeforeShot({ firstVisible: 20, before: [{ t: 10 }] });
   assert(p1.shot.t === 19.4 && p1.alts.length === 2 && p1.alts[0] === 19 && p1.alts[1] === 18.6, "docelowo początek − 0,6 s; dwa wcześniejsze czasy zapasowe co 0,4 s");
   const p2 = chooseBeforeShot({ firstVisible: 27.1, before: [{ t: 26.9 }] });
-  assert(p2.tight === true && p2.shot.t === 26.9, "ostatnia wiadomość tuż przed zdjęciem → tight, czas = początek − 0,2 s");
+  assert(p2.tight === true && p2.shot.t === 27, "ostatnia wiadomość tuż przed zdjęciem → tight, czas = min(początek − 0,1 s, ostatnia wiadomość + 0,1 s): nigdy przed ostatnią wiadomością");
+  const p3 = chooseBeforeShot({ firstVisible: 2.9, before: [{ t: 2.3 }, { t: 2.8 }] }); // przypadek z żywego testu: wiadomość 0,1 s przed zdjęciem
+  assert(p3.tight === true && p3.shot.t === 2.8 && p3.shot.t >= 2.8, "wiadomość 0,1 s przed zdjęciem: klatka w chwili tej wiadomości, nie wcześniej (wcześniej było początek − 0,2 = 2,7 s, przed wiadomością)");
   assert(chooseBeforeShot({ p0: 27.1, before: [{ t: 20 }] }).shot.t === 26.5, "bez czasu z wizji: p0 zamiast pierwszego pojawienia się");
   assert.strictEqual(chooseBeforeShot({ firstVisible: 0.4, before: [{ t: 0.05 }] }).code, "ZDJECIE_NA_POCZATKU");
   assert.strictEqual(chooseBeforeShot({ firstVisible: 0.4, before: [{ t: 0.05 }] }).shot, null);

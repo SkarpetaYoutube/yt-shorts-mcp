@@ -29,6 +29,8 @@ const reelMaxS = Number(opt("reel-max", "480")); // twardy limit czasu na jedną
 const maxTotalS = Number(opt("max-total", "1500")); // twardy limit czasu CAŁEJ próby (s): obejmuje przewijanie, przeładowania i oczekiwanie; po nim program kończy się z zapisanym manifestem
 const callMaxS = Number(opt("call-max", "120")); // limit jednego wywołania w stronie (skan okna, przewinięcie, zrzut) — zawieszone wywołanie nie blokuje rolki
 const shiftTol = Number(opt("shift", "0.5"));
+// budżet ponowień odtwarzacza na rolkę (domyślnie jak dotąd); druga runda w zbierz_rolki.ps1 podaje większy, bo zostają tylko rolki, które zawiodły
+const maxReloads = Number(opt("reloads", "2")), retryBudgetMs = Number(opt("retry-budget", "90")) * 1000, bufferWaitMs = Number(opt("buffer-wait", "12")) * 1000;
 const runStart = Date.now(), runEnd = runStart + maxTotalS * 1000;
 const failStatus = (m, other) => (/LIMIT_CZASU|LIMIT CZASU/.test(m) ? (/całej/.test(m) ? "NIEUKONCZONA_LIMIT_CALOSCI" : "NIEUKONCZONA_LIMIT_CZASU") : /LIMIT_PONOWIEN/.test(m) ? "ODTWARZACZ_NIEDOSTEPNY" : other);
 const withTimeoutTop = (p, ms, what) => { let tm; return Promise.race([p.finally(() => clearTimeout(tm)), new Promise((_, rej) => { tm = setTimeout(() => rej(new Error(`NOT_READY[ZAWIESZENIE]: ${what} przekroczyło ${Math.round(ms / 1000)} s`)), Math.max(1000, ms)); })]); }; // tolerancja rozbieżności czasu modelu i zmierzonego (s)
@@ -167,7 +169,7 @@ async function processReel(rec, ch) {
     };
     // Ponowienia odtwarzacza są OGRANICZONE na rolkę: najwyżej MAX_RELOADS przeładowań i RETRY_BUDGET_MS łącznego czasu bez postępu; potem rolka kończy się jawnym statusem (nie kilka minut na jednej rolce).
     // Przyczyny rozdzielone: BLAD_ODTWARZACZA (ekran błędu YouTube) | BUFOROWANIE (czekamy bez przeładowania) | SEEK (przewinięcie nie zadziałało) | ZLY_FILM.
-    const MAX_RELOADS = 2, RETRY_BUDGET_MS = 90000;
+    const MAX_RELOADS = maxReloads, RETRY_BUDGET_MS = retryBudgetMs;
     const player = { reloads: 0, retryMs: 0, incidents: [], exhausted: null };
     const logPlayer = () => { (stats.player_by_reel ||= {})[rec.video_id] = { incidents: player.incidents.length, reloads: player.reloads, retry_s: Math.round(player.retryMs / 1000), exhausted: player.exhausted }; D(`  odtwarzacz: incydentów ${player.incidents.length} (${["BLAD_ODTWARZACZA", "BUFOROWANIE", "SEEK", "ZLY_FILM"].map((k) => k + " ×" + player.incidents.filter((x) => x.kind === k).length).join(", ")}), przeładowań ${player.reloads}/${MAX_RELOADS}, czas bez postępu ${Math.round(player.retryMs / 1000)} s${player.exhausted ? "; BUDŻET PONOWIEŃ WYCZERPANY" : ""}`); };
     const kindOf = (m) => (/NOT_READY\[(BLAD_ODTWARZACZA|BUFOROWANIE|SEEK|ZAWIESZENIE)\]/.exec(m) || [])[1] || (/WRONG_VIDEO/.test(m) ? "ZLY_FILM" : null);
@@ -196,7 +198,7 @@ async function processReel(rec, ch) {
           D(`  problem odtwarzacza: ${kind} — ${m.split("\n")[0].slice(0, 220)}`); player.incidents.push({ kind, at: new Date().toISOString() });
           if (player.exhausted) { spent(); throw new Error(`LIMIT_PONOWIEN: ${player.exhausted}`); }
           await dump(`${kind.toLowerCase()}${player.incidents.length}`);
-          if (kind === "BUFOROWANIE" && !buffWaited && left() > 15000) { buffWaited = true; D("  buforowanie: czekam do 12 s na dane, bez przeładowania"); const okw = await withTimeout(waitStable(12000), 15000, "oczekiwanie na bufor").catch(() => false); spent(); if (okw) continue; }
+          if (kind === "BUFOROWANIE" && !buffWaited && left() > 15000) { buffWaited = true; D(`  buforowanie: czekam do ${Math.round(bufferWaitMs / 1000)} s na dane, bez przeładowania`); const okw = await withTimeout(waitStable(bufferWaitMs), bufferWaitMs + 3000, "oczekiwanie na bufor").catch(() => false); spent(); if (okw) continue; }
           if (player.reloads >= MAX_RELOADS || player.retryMs >= RETRY_BUDGET_MS || left() < 10000) { spent(); player.exhausted = `budżet ponowień rolki wyczerpany (przeładowań ${player.reloads}/${MAX_RELOADS}, ${Math.round(player.retryMs / 1000)} s bez postępu; ostatnia przyczyna: ${kind})`; D(`  ${player.exhausted} — dalej nie ponawiam`); throw new Error(`LIMIT_PONOWIEN: ${player.exhausted}`); }
           player.reloads++; D(`  ${kind}: przeładowuję stronę i odtwarzam stan (przeładowanie ${player.reloads}/${MAX_RELOADS})`);
           await withTimeout(prepare(true), Math.min(60000, Math.max(1000, left())), "przeładowanie strony").catch((e2) => D("  przygotowanie nie powiodło się: " + String(e2.message).split("\n")[0]));
@@ -370,13 +372,16 @@ async function processReel(rec, ch) {
               n++; const relB = `frames/${rec.video_id}/zdjecie${im.id}${e.file_suffix}_kontekst${n}_przed.png`; keepOld(relB);
               fs.writeFileSync(path.join(outDir, relB), Buffer.from(gotB.img.data, "base64"));
               e.context_shots.push({ order: n, role: "przed", file: relB, t_s: Math.round(gotB.t_actual * 100) / 100, t_planned_s: usedT, resolution: `${gotB.img.w}x${gotB.img.h}`, source_resolution: `${gotB.img.source_w}x${gotB.img.source_h}`, photo_visible: gotB.photo_visible, card_box_px: gotB.card, reason: `${bp.shot.reason}${usedT !== bp.shot.t ? "; wcześniejszy czas (na pierwszym zdjęcie było już widoczne)" : ""}` });
-              D(`  zdjęcie ${im.id}: kadr „przed” (${n}) t=${gotB.t_actual.toFixed(2)} s; wiadomości przed: ${beforeMsgs.length}${bp.tight ? " (ostatnia tuż przed zdjęciem)" : ""}`);
+              // klatka zrobiona PRZED czasem ostatniej potrzebnej wiadomości nie może jej pokazywać: kadr zapisany, ale oznaczony jako niepełny (kategoria „częściowy”)
+              const lastNeeded = Math.max(...beforeMsgs.map((m) => m.t));
+              if (gotB.t_actual < lastNeeded - 0.05) { e.before_complete = false; e.before_early = { t_shot_s: Math.round(gotB.t_actual * 100) / 100, last_message_s: lastNeeded }; }
+              D(`  zdjęcie ${im.id}: kadr „przed” (${n}) t=${gotB.t_actual.toFixed(2)} s; wiadomości przed: ${beforeMsgs.length}${bp.tight ? " (ostatnia tuż przed zdjęciem)" : ""}${e.before_early ? " — klatka sprzed ostatniej wiadomości (" + lastNeeded.toFixed(2) + " s): kadr niepełny" : ""}`);
             } else {
               e.before_complete = false; e.context_shots.push({ role: "przed", t_planned_s: bp.shot.t, file: null, error: whyB, reason: bp.shot.reason });
               D(`  zdjęcie ${im.id}: kadr „przed” NIE zapisany: ${whyB}`);
             }
           } else D(`  zdjęcie ${im.id}: kadr „przed” pominięty (${bp.code}: ${bp.why})`);
-          e.note += `; kadr przed: ${bp.shot ? (e.before_complete ? "zapisany" : "NIE zapisany") : bp.code}`;
+          e.note += `; kadr przed: ${bp.shot ? (e.before_complete ? "zapisany" : e.before_early ? "zapisany, ale sprzed ostatniej wiadomości (niepełny)" : "NIE zapisany") : bp.code}`;
         }
         if (allOk && pick.shots[0].needPhoto && !e.context_shots.some((x) => x.file && x.photo_visible)) { allOk = false; e.context_error = "żaden screen kontekstu nie pokazuje zdjęcia"; }
         e.context_v = 2; e.context_complete = allOk; e.context_confirmed = allOk; e.conversation_file = e.context_shots.find((x) => x.file)?.file ?? null;

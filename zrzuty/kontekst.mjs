@@ -60,7 +60,8 @@ export function chooseBeforeShot({ firstVisible, p0, before }) {
   if (!Number.isFinite(fv) || !Number.isFinite(lastT)) return { shot: null, alts: [], code: "BLEDNE_DANE", why: "brak czasu pojawienia się zdjęcia albo wiadomości przed" };
   const hi = fv - BEFORE_HI_S, lo = lastT + BEFORE_LO_S; const tight = lo > hi;
   const r2 = (x) => Math.round(x * 100) / 100;
-  const t = r2(Math.min(hi, Math.max(lo, fv - BEFORE_WANT_S)));
+  // gdy ostatnia wiadomość „przed” pojawia się tuż przed zdjęciem (okno puste), klatka nie może być zrobiona przed tą wiadomością: bierzemy chwilę zaraz po niej, ale przed zdjęciem
+  const t = r2(tight ? Math.min(fv - 0.1, lastT + 0.1) : Math.min(hi, Math.max(lo, fv - BEFORE_WANT_S)));
   if (t < 0.3) return { shot: null, alts: [], code: "ZDJECIE_NA_POCZATKU", why: `zdjęcie pojawia się na początku wideo (${fv.toFixed(2)} s): nie ma klatki sprzed niego` };
   const floor = Math.max(0.3, lastT + 0.15); const alts = [];
   for (let a = r2(t - BEFORE_ALT_STEP_S); a >= floor && alts.length < 2; a = r2(a - BEFORE_ALT_STEP_S)) alts.push(a);
