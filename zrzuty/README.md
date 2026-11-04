@@ -63,3 +63,10 @@ Uwaga: automatyczne otwieranie YouTube skryptem może być sprzeczne z jego regu
 ## Mniej ręcznej pracy przy przeglądzie (2026-11-01)
 - **Wpis modelu bez zdjęcia na klatkach** (`NIE_ZNALEZIONO` / `PRZYPISANE_DO_INNEGO` bez błędu odtwarzacza): raport i `zdjecia.md` oznaczają go osobno („możliwy fałszywy wpis modelu”, np. awatar), liczą w kolumnie `zdjec_brak_podejrzane_wpisy` i NIE dodają rolki do komendy ponowienia, bo ponawianie tego nie naprawi. Błąd odtwarzacza zostaje na liście do ponowienia.
 - **Arkusze audytu** (`audyt_arkusze.mjs <folder_kanalu>`, wywoływane automatycznie przez `zbierz_rolki.ps1`): w `<kanał>\_audyt\` jeden obraz na zdjęcie (klatki kontekstu jedna pod drugą), `ARKUSZE.md` z wiadomościami z wizji obok i `audyt_szablon.json` z gotowymi plikami i sumami md5 (do wypełnienia: `result`, `missing`; potem `node audyt.mjs <kanał>\_zrzuty_robocze <audyt.json>`). Program niczego nie ocenia, tylko skraca przegląd; `--wszystkie` obejmuje też już sprawdzone.
+
+## TikTok: lokalny układ wyników (2026-11-05)
+`.\zbierz_tiktok.ps1 -Manifest "<manifest_link z export_tiktok>"` pobiera eksport (SHA-256) i układa go przez `tiktok_rozloz.mjs`:
+- `wyniki\TikTok - <konto>\<konto> - <opis> [<ID>]\`: `dane.md` (karta: statystyki, stosunki, tagi, opis, transkrypt), `dane.json`, `dane.csv`, `transkrypt.txt` (czysty tekst), `transkrypt_czasy.txt`.
+- `_zbiorczo\`: `indeks_filmow.csv/md` (jedna linia na film, od najnowszego), `do_analizy.md` (wszystkie filmy konta w jednym pliku do wklejenia czatowi), `eksport_serwera\` (oryginalne pliki).
+- `_baza\`: `baza_filmow.json/csv` scala kolejne eksporty bez duplikatów, z historią statystyk (przyrost wyświetleń od pierwszego pomiaru) i kopiami zapasowymi.
+Test: `node test_tiktok.mjs`.
