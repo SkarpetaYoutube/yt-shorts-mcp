@@ -385,6 +385,19 @@ async function sdSend(s: Services, path: string, params: Record<string, string> 
   throw explainSd(last!.status, last!.body);
 }
 
+/** Metadane i statystyki jednego posta (TikTok i inne platformy) z Supadata /metadata. Liczone jak każde zapytanie Supadata (rezerwacja 1 kredytu + nagłówek x-billable-requests). */
+export async function sdMetadata(s: Services, url: string): Promise<any> {
+  const resp = await sdSend(s, "/metadata", { url }, true);
+  if (resp.status === 200) return await resp.json();
+  let body: any = null;
+  try {
+    body = await resp.json();
+  } catch {
+    /* */
+  }
+  throw explainSd(resp.status, body);
+}
+
 export type RawResult =
   | { state: "ok"; raw: any }
   | { state: "unavailable" }

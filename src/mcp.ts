@@ -149,6 +149,35 @@ export const TOOLS = [
       "dla partii (batch_id) jedna tabela: rolka, status, liczba prób, czas, zużycie, liczba zdjęć, czas całej partii.",
     inputSchema: obj({ video: { type: "string", description: "Link do rolki lub ID" }, batch_id: { type: "string", description: "Partia z analyze_images" } }),
   },
+  {
+    name: "collect_tiktok",
+    description:
+      "TikTok: pobiera statystyki (wyświetlenia, polubienia, komentarze, udostępnienia, opis, tagi, data, długość) i transkrypt (ze znacznikami czasu) dla podanych linków do filmów, przez Supadata. " +
+      "Lista filmów kanału TikTok NIE jest dostępna dla serwera: linki do filmów podaje użytkownik (urls). Bez zdjęć i bez Gemini. " +
+      "Pierwsze wywołanie z urls tworzy partię i pobiera tylko 1 film jako próbkę kosztu (pole next_step podaje zużycie kredytów); kolejne wywołania z batch_id pobierają po 10 filmów, aż complete=true, potem export_tiktok. " +
+      "Bez parametrów: lista ostatnich partii. Kredyty Supadata liczą się do tego samego dziennego bezpiecznika co YouTube (get_usage).",
+    inputSchema: obj({
+      urls: { type: "array", items: { type: "string" }, description: "Linki do filmów TikTok (https://www.tiktok.com/@konto/video/ID; także krótkie vm./vt.tiktok.com), maks. 100 w partii" },
+      batch_id: { type: "string", description: "Partia z poprzedniego wywołania (kontynuacja albo dopisanie kolejnych urls)" },
+      label: { type: "string", description: "Etykieta partii (np. nazwa konta)" },
+      transcript_mode: { type: "string", enum: ["native", "auto"], default: "native", description: "native = tylko istniejące napisy (1 kredyt/film); auto = także generowanie AI dla filmów bez napisów (droższe). Zmiana na auto ponowi filmy bez napisów." },
+      lang: { type: "string", description: "Kod języka transkrypcji; pominięty = oryginalny" },
+      retry_failed: { type: "boolean", default: false, description: "Ponów też filmy z błędem usługi/filmu" },
+      step_items: { type: "integer", minimum: 1, maximum: 10, description: "Ile filmów przetworzyć w tym wywołaniu (domyślnie 10; 1 przy tworzeniu partii)" },
+    }),
+  },
+  {
+    name: "export_tiktok",
+    description:
+      "Eksport partii TikTok do plików CSV, JSON i Markdown (z linkami do pobrania i manifestem, jak export_collection). Eksport całej partii wymaga complete=true albo allow_partial=true. " +
+      "Pozycja i mediana konta (author_*_in_sample) są liczone tylko wśród filmów podanych w eksporcie, nie na całym koncie TikTok.",
+    inputSchema: obj({
+      batch_id: { type: "string" },
+      batch_ids: { type: "array", items: { type: "string" }, description: "Kilka partii w jednym eksporcie (maks. 20)" },
+      allow_partial: { type: "boolean", default: false },
+      label: { type: "string" },
+    }),
+  },
   { name: "resolve_channel", description: "Sprawdza kanał (handle/URL/ID) bez zbierania filmów.", inputSchema: obj({ channel: { type: "string" } }, ["channel"]) },
   { name: "get_usage", description: "Dzisiejsze zużycie limitów API liczone przez ten serwer (YouTube units, kredyty Supadata) i bezpieczniki.", inputSchema: obj({}) },
 ];
@@ -364,6 +393,26 @@ export async function dispatch(env: Env, origin: string, st: any, name: string, 
         download_hint: "Na komputerze: .\\pobierz_zestaw.ps1 -Manifest \"<manifest_link>\" -Nazwa <folder> (pobiera wszystkie pliki i sprawdza SHA-256).",
         verification: "Każdy rekord po zapisie odczytano z powrotem i porównano z bazą (wszystkie pola, pełny tekst transkrypcji i segmenty czasowe; Markdown zawiera ID i każdy segment).",
         note: "csv = UTF-8 z BOM (Excel), json = tablica rekordów, md-N = paczka dla modelu (części), status = raport integralności, statusy braków i definicje pól.",
+      };
+    }
+    case "collect_tiktok": {
+      const tm = a.transcript_mode == null ? null : oneOf(a.transcript_mode, "transcript_mode", ["native", "auto"] as const, "native");
+      return await st.startTikTok({
+        urls: a.urls, batchId: str(a.batch_id, "batch_id", false), label: str(a.label, "label", false), mode: tm, lang: str(a.lang, "lang", false),
+        retryFailed: bool(a.retry_failed, "retry_failed") === true, stepItems: a.step_items == null ? null : int(a.step_items, "step_items", 10),
+      });
+    }
+    case "export_tiktok": {
+      const ids: string[] = Array.isArray(a.batch_ids) ? a.batch_ids.map((x: unknown) => str(x, "batch_ids")!) : [];
+      if (a.batch_id != null) ids.unshift(str(a.batch_id, "batch_id")!);
+      const info = await st.exportTikTok({ batchIds: ids, allowPartial: a.allow_partial === true, label: str(a.label, "label", false) });
+      const links: Record<string, string> = {};
+      for (const f of [...Object.keys(info.files), "status"]) links[f] = await signExport(env, origin, info.id, f);
+      return {
+        ok: true, phase: "ready", set_id: info.id, label: info.label, platform: "tiktok", partial_export: info.partial, records: info.records, notes: info.notes, files: info.files, md_parts: info.md_parts,
+        download_links: links, manifest_link: await signExport(env, origin, info.id, "manifest"), link_valid_seconds: Number(env.EXPORT_LINK_TTL_SECONDS) || 3600,
+        download_hint: "Na komputerze: .\\pobierz_zestaw.ps1 -Manifest \"<manifest_link>\" -Nazwa <folder> (pobiera wszystkie pliki i sprawdza SHA-256).",
+        note: "csv = UTF-8 z BOM (Excel), json = tablica rekordów, md-N = paczka dla modelu, status = raport i definicje pól. Odczyt bez linków: export_collection z set_id i read_file.",
       };
     }
     default:

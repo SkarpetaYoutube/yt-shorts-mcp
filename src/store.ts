@@ -27,6 +27,7 @@ import { PauseError, UserError, type Env } from "./types";
 import { sha256Hex } from "./util";
 import { SetBuilder, type SetSpec } from "./sets";
 import { timedStatus } from "./csv";
+import { migrateTt, pruneTt, ttAddUrls, ttBuildExport, ttExportChunks, ttExportInfo, ttList, ttStatus, ttStep, TT_STEP_DEFAULT } from "./tiktok";
 import { GEMINI_DEFAULT_MODEL, compareRuns, isRetryable, runGemini, videoIdFrom, visToMarkdown, type VisRecord } from "./vision";
 import { addUsed, nextPacificMidnight, reserve } from "./clients";
 
@@ -136,6 +137,7 @@ export function migrate(sql: SqlStorage): void {
   sql.exec(`CREATE TABLE IF NOT EXISTS vis (id TEXT PRIMARY KEY, vid TEXT NOT NULL, fps REAL NOT NULL, status TEXT NOT NULL, state TEXT NOT NULL,
              created INTEGER NOT NULL, updated INTEGER NOT NULL)`);
   sql.exec(`CREATE INDEX IF NOT EXISTS vis_vid ON vis(vid, created)`);
+  migrateTt(sql);
   const cols = (t: string) => new Set(sql.exec(`PRAGMA table_info(${t})`).toArray().map((r) => String(r.name)));
   const add = (t: string, defs: string[]) => {
     const have = cols(t);
@@ -259,6 +261,7 @@ export class Store extends DurableObject<Env> {
       sql.exec("DELETE FROM jobs WHERE id=?", id);
     }
     this.sets().prune(Date.now() - 7 * 86400_000);
+    pruneTt(sql, cutoff);
     sql.exec("DELETE FROM vis WHERE created < ?", Date.now() - STATS_MAX_DAYS * 86400_000);
     sql.exec("DELETE FROM cache WHERE exp < ?", Date.now());
     sql.exec("DELETE FROM snaps WHERE at < ?", Date.now() - STATS_MAX_DAYS * 86400_000);
@@ -973,6 +976,47 @@ export class Store extends DurableObject<Env> {
     };
   }
 
+  // -------------------------------------------------------------------------- TikTok (Supadata: statystyki + transkrypt pojedynczych filmów)
+
+  /**
+   * Tworzy partię z linków (pierwszy krok pobiera tylko 1 film jako próbkę kosztu) albo kontynuuje istniejącą (kolejne filmy, ponowienia).
+   * Bez linków i bez batch_id zwraca listę ostatnich partii.
+   */
+  async startTikTok(p: { urls?: unknown; batchId: string | null; label: string | null; mode: TMode | null; lang: string | null; retryFailed: boolean; stepItems: number | null }): Promise<any> {
+    const sql = this.ctx.storage.sql;
+    const s = this.svc();
+    const hasUrls = p.urls != null && (Array.isArray(p.urls) ? p.urls.length > 0 : String(p.urls).trim() !== "");
+    if (!hasUrls && !p.batchId) return { batches: ttList(sql, 10), note: "Podaj urls (linki do filmów TikTok), aby zacząć nową partię, albo batch_id, aby kontynuować." };
+    let batchId = p.batchId, added: any = null, sample = false;
+    if (hasUrls) {
+      const r = ttAddUrls(sql, p.urls, { label: p.label, mode: p.mode ?? "native", lang: p.lang, batchId: p.batchId });
+      batchId = r.batch.id;
+      added = { added: r.added, duplicates_skipped: r.duplicates, rejected_links: r.rejected.slice(0, 10) };
+      sample = !p.batchId;
+    }
+    const limit = p.stepItems != null ? Math.max(1, Math.min(TT_STEP_DEFAULT, p.stepItems)) : sample ? 1 : TT_STEP_DEFAULT;
+    const step = await ttStep(s, batchId!, { retryFailed: p.retryFailed, mode: p.mode, limit });
+    const st = ttStatus(sql, batchId!);
+    const used = budgetUsed(s, "sd_credits", "UTC");
+    let next: string;
+    if (step.stopped === "credits") next = "Kredyty Supadata się skończyły (albo plan ich nie obejmuje). Postęp jest zapisany; wznów po doładowaniu/odnowieniu limitu (collect_tiktok z batch_id).";
+    else if (step.stopped === "daily_limit") next = `${step.stopped_msg ?? "Dzienny bezpiecznik kredytów."} Postęp jest zapisany.`;
+    else if (st.complete) next = "Gotowe. Wywołaj export_tiktok z batch_id, aby dostać pliki CSV/JSON/Markdown.";
+    else if (sample && step.processed > 0) {
+      const perVideo = step.credits_used;
+      next = `Próbka: 1 film zużył ${perVideo} kredytów Supadata (statystyki + transkrypt). Pozostałe ${st.remaining} filmów to około ${Math.round(perVideo * st.remaining * 10) / 10} kredytów (więcej, jeśli transcript_mode=auto generuje transkrypty AI). Wywołaj collect_tiktok z batch_id=${batchId}, aby kontynuować (po ${TT_STEP_DEFAULT} filmów na wywołanie).`;
+    } else next = `Zostało ${st.remaining} filmów. Wywołaj collect_tiktok z batch_id=${batchId} ponownie (po ${TT_STEP_DEFAULT} filmów na wywołanie).`;
+    return {
+      ok: true, ...st, ...(added ?? {}), step: { processed: step.processed, stopped: step.stopped, credits_used: step.credits_used },
+      supadata_credits_today: used, supadata_credits_safety_limit: sdLimit(s), next_step: next,
+    };
+  }
+
+  /** Eksport partii TikTok (CSV/JSON/Markdown/status) pod id „t-...”; pliki pobiera się tymi samymi linkami co eksporty YouTube. */
+  async exportTikTok(p: { batchIds: string[]; allowPartial: boolean; label: string | null }): Promise<any> {
+    return await ttBuildExport(this.ctx.storage.sql, p.batchIds, { allowPartial: p.allowPartial, label: p.label });
+  }
+
   async resolve(ref: string): Promise<any> {
     return await resolveChannel(this.svc(), ref);
   }
@@ -1017,6 +1061,10 @@ export class Store extends DurableObject<Env> {
   }
 
   async exportInfo(id: string): Promise<{ phase: string; partial: boolean; files: any; error: string | null; set_id: string } | null> {
+    if (id.startsWith("t-")) {
+      const t = ttExportInfo(this.ctx.storage.sql, id);
+      return t ? { phase: "ready", partial: t.partial, files: t.files, error: null, set_id: id } : null;
+    }
     const setId = this.resolveSetId(id);
     if (!setId) return null;
     const i = this.sets().info(setId);
@@ -1027,6 +1075,7 @@ export class Store extends DurableObject<Env> {
   /** Zwraca fragmenty pliku eksportu w kolejności (do strumieniowania w Workerze). */
   async exportChunks(id: string, fmt: string): Promise<string[] | null> {
     if (id.startsWith("v-")) return this.visChunks(id, fmt);
+    if (id.startsWith("t-")) return ttExportChunks(this.ctx.storage.sql, id, fmt);
     const setId = this.resolveSetId(id);
     if (!setId) return null;
     return this.sets().chunks(setId, fmt);
@@ -1668,7 +1717,7 @@ void PauseError;
 export const UE_PREFIX = "UE:";
 for (const name of [
   "startJob", "resume", "refresh", "backfillTimestamps", "status", "list", "read", "singleTranscript", "resolve", "usage",
-  "startSet", "setInfo", "startExport", "exportInfo", "exportChunks", "startVision", "visionStatus", "visionBatch",
+  "startSet", "setInfo", "startExport", "exportInfo", "exportChunks", "startVision", "visionStatus", "visionBatch", "startTikTok", "exportTikTok",
 ] as const) {
   const orig = (Store.prototype as any)[name] as (...a: unknown[]) => Promise<unknown>;
   (Store.prototype as any)[name] = async function (this: Store, ...args: unknown[]) {

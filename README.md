@@ -54,6 +54,16 @@ Wynik wizji każdej rolki trafia do wspólnego eksportu bez utraty szczegółów
 - `get_collection_status` ma pole `vision`: `ok`, `in_progress`, `failed`, `not_analyzed` oraz listę partii zlecanych dla zadania. Gotowe wyniki trafiają do eksportu automatycznie.
 - Nieudane rolki: `analyze_images` z `retry_batch` (jak dotąd).
 
+### Wersja 2.9: TikTok (statystyki i transkrypty)
+
+Narzędzia `collect_tiktok` i `export_tiktok` pobierają **statystyki** (wyświetlenia, polubienia, komentarze, udostępnienia, opis, tagi, data, długość) i **transkrypt ze znacznikami czasu** dla podanych linków do filmów TikTok, przez Supadata. Bez zdjęć i bez Gemini.
+
+- **Lista filmów kanału TikTok nie jest dostępna** (Supadata ma ją tylko dla YouTube, a strona TikToka blokuje automaty): linki do filmów (`urls`, maks. 100 w partii) podaje użytkownik. Przyjmowane są tylko publiczne linki do filmów `tiktok.com/@konto/video/ID` i krótkie `vm.`/`vt.tiktok.com`.
+- Pierwsze wywołanie z `urls` tworzy partię (`batch_id`) i pobiera **tylko 1 film jako próbkę kosztu** (`next_step` podaje zużycie kredytów i szacunek reszty); kolejne wywołania z `batch_id` biorą po 10 filmów, aż `complete=true`. `transcript_mode=auto` generuje transkrypty AI dla filmów bez napisów (droższe) i ponawia te bez napisów.
+- Kredyty Supadata liczą się do tego samego dziennego bezpiecznika co YouTube (`get_usage`); wyczerpanie kończy krok bez błędu, postęp jest zapisany.
+- `export_tiktok` daje CSV, JSON, Markdown i raport (`status`) z linkami i manifestem jak `export_collection` (`pobierz_zestaw.ps1` działa bez zmian). Pozycja i mediana konta (`author_*_in_sample`) są liczone tylko wśród filmów z eksportu (próba), nie na całym koncie.
+- Dane partii wygasają po `COLLECT_RETENTION_DAYS` (domyślnie 30 dni), jak reszta.
+
 ### Wersja 2.8.1: awatary w wynikach wizji
 
 Prompt wizji mocniej zabrania wpisywania awatarów z nagłówka czatu jako zdjęć. Gdy model mimo to wpisze awatar (sam opisuje go jako awatar/zdjęcie profilowe w nagłówku czatu albo opis zaczyna się od „Zdjęcie profilowe”), zdjęcie dostaje pole `likely_avatar: true`. Wpis **nie jest usuwany**: lokalny potok zrzutów pomija takie zdjęcia (z adnotacją w `zdjecia.md`), a dane w eksporcie zostają.

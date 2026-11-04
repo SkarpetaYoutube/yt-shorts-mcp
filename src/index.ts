@@ -33,7 +33,7 @@ const apiHandler = {
 };
 
 async function serveExport(request: Request, env: Env, url: URL): Promise<Response> {
-  const m = /^\/exports\/([csv]-[a-f0-9]{24})\/(csv|json|status|manifest|md|md-\d{1,3})$/.exec(url.pathname);
+  const m = /^\/exports\/([cvst]-[a-f0-9]{24})\/(csv|json|status|manifest|md|md-\d{1,3})$/.exec(url.pathname);
   if (!m || request.method !== "GET") return json({ error: "not_found" }, 404);
   const [, id, fmt] = m;
   const exp = Number(url.searchParams.get("exp"));
